@@ -77,20 +77,20 @@ class NetworkTopo( Topo ):
     
 def run_s1(net):
     net['s1'].cmd('./run_s1_bw_heuristics.sh  2> s1.out &')
-    time.sleep(400)
+    time.sleep(200)
     
     
 def run_c1(net):
     net['c1'].cmd('./run_c1.sh s1 2> c1.out &')
-    time.sleep(400)
+    time.sleep(200)
     
 def run_s2(net):
     net['s2'].cmd('./run_s2.sh 0 200 2> s2.out &')
-    time.sleep(400)
+    time.sleep(200)
 
 def run_c2(net):
     net['c2'].cmd('./run_c2.sh s2 2> c2.out &')
-    time.sleep(400)
+    time.sleep(200)
     
 
 def run_s3_c3(net):
