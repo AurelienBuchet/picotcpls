@@ -31,6 +31,8 @@ cd t/ipmininet
 sudo python3 topo-for-test-ebpf-cc.py 60 100 0 0
 ```
 
+The test will last around 500 seconds. Please wait.
+
 The generated logs are here /tmp/{s1,s2,server1,server2}.log
 
 ## Plot the graphic
