@@ -63,9 +63,13 @@ char *ebpf_program_path = NULL;
 char *ebpf_program_name = NULL;
 int goodput_file_fd = -1;
 char *goodput_file = NULL;
+char *multipath_file = "multipath_test.data";
 static  double start_time;
 static int change_cc = 0;
 static int limit_cc  = 1;
+static int check_bw  = 0;
+static int epoch     = 2;
+static int bw_var_limit  = 40;
 
 static void shift_buffer(ptls_buffer_t *buf, size_t delta)
 {
@@ -185,10 +189,8 @@ static int load_set_cc(tcpls_t *tcpls, char *ebpf_path, char *cc_name, int trans
     while ((ioret = read(fd, bpf_cc_buff+4+name_sz+4+4+4, f_sz)) == -1 && errno == EINTR)
         ;
     ptls_set_bpf_cc(tcpls->tls, (uint8_t *)bpf_cc_buff,4+name_sz+4+4+4+f_sz, 1, 1);
-    fprintf(stderr, "sending 1 (%s)\n", cc_name);
   }else{
     ptls_set_bpf_cc(tcpls->tls, (uint8_t *)bpf_cc_buff,4+name_sz+4+4, 1, 1);
-    fprintf(stderr, "sending 2 (%s)\n", cc_name);
   }
   tcpls_send_tcpoption(tcpls, transportid, BPF_CC, 1);
   return 0;
@@ -434,9 +436,35 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
         return -1;
       }
       sent_data += ioret;
-      if(sent_data/1000000 > sent_dataMB){
+      if(sent_data/(epoch*1000000) > sent_dataMB){
         sent_dataMB++;
         static int sent_cc = 0;
+        static double last_delta_time = 0;
+        double delta_time = (gettime_ms() - start_time)/1000;
+        double bw = (epoch/(delta_time-last_delta_time))*1000*8;
+        dprintf(goodput_file_fd, "%.6f  %.6f %d\n", delta_time/1000, 
+                        bw , sent_dataMB*epoch);
+        last_delta_time = delta_time;
+        if(check_bw){
+          static double max_bw = 0;
+          static int already_change_cc = 0;
+          static int thresh = 0;
+          if(((max_bw - bw) > bw_var_limit) && !already_change_cc && (thresh >= 3)){
+            fprintf(stderr, "it's time to change cc: %.6f %.6f %d", delta_time/1000, bw, thresh);
+            connect_info_t *con = NULL;
+            for (int i = 0; i < tcpls->connect_infos->size; i++) {
+              con = list_get(tcpls->connect_infos, i);
+              if (con->is_primary) 
+                break;
+            }
+            load_set_cc(tcpls, ebpf_program_path, ebpf_program_name, con->this_transportid, 1);
+            already_change_cc = 1;
+          }
+          if((max_bw - bw) > bw_var_limit)
+            thresh++;
+          if((bw < 100) && (bw > max_bw)) max_bw = bw;
+        }
+            
         if(ebpf_program_path && ebpf_program_name && change_cc){
           if(!(sent_dataMB%limit_cc)){   
             connect_info_t *con = NULL;
@@ -530,13 +558,13 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     int ret;
     ptls_buffer_t recvbuf;
     ptls_buffer_init(&recvbuf, "", 0);
-    FILE *mtest = fopen("multipath_test.data", "w");
+    FILE *mtest = fopen(multipath_file, "w");
     assert(mtest);
     if (handle_tcpls_read(tcpls, 0, &recvbuf) < 0) {
       ret = -1;
       goto Exit;
     }
-    printf("Handshake done\n");
+    printf("Handshake done %s\n", multipath_file);
     fd_set readfds, writefds, exceptfds;
     int has_migrated = 0;
     int has_remigrated = 0;
@@ -584,13 +612,24 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
             break;
           }
           received_data += ret;
-          if (received_data / 20000000 > mB_received) {
+          if (received_data / (epoch * 1000000) > mB_received) {
             static double last_delta_time = 0;
             double delta_time = (gettime_ms() - start_time)/1000;
             mB_received+=1;
+            double bw = (epoch/(delta_time-last_delta_time))*1000*8;
             dprintf(goodput_file_fd, "%.6f  %.6f %d\n", delta_time/1000, 
-                        (20/(delta_time-last_delta_time))*1000*8, mB_received*20);
+                        bw , mB_received*epoch);
             last_delta_time = delta_time;
+            if(check_bw){
+              static double last_bw = 0;
+              if((last_bw - bw) > 40)
+                fprintf(stderr, "it's time to change cc: (%.6f) (%.6f)", bw, last_bw);          
+              last_bw = bw;
+            }
+            char  cc[10];
+            socklen_t len = sizeof(cc);
+            getsockopt(*socket, SOL_TCP, TCP_CONGESTION, (void*)cc, &len);
+            dprintf(goodput_file_fd, " (%s:%d)\n",cc, *socket);
           }
           if (outputfile && ret >= 0) {
             /** write infos on this received data */
@@ -1068,6 +1107,11 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     }
 
     if (ctx->support_tcpls_options) {
+      char *path = malloc(5+strlen(goodput_file) + 5);
+      snprintf(path, 5+strlen(goodput_file) + 5, "/tmp/%s%s", goodput_file, ".log");
+      goodput_file_fd = open(path, O_CREAT | O_WRONLY ,
+                   S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+      start_time = gettime_ms();
       while (1) {
         struct conn_to_tcpls *conn;
         /** do some cleanup of tcpls_l if some have to be removed */
@@ -1324,7 +1368,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     tcpls_options.peer_addrs6 = new_list(39*sizeof(char), 2);
     int family = 0;
 
-    while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:T:fg:j:m:x:rw:")) != -1) {
+    while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:T:fg:j:m:x:rw:XW:R:D:")) != -1) {
       switch (ch) {
         case '4':
           family = AF_INET;
@@ -1557,6 +1601,18 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
                   break;
         case 'w':
                   limit_cc = atoi(optarg);
+                  break;
+        case 'X':
+                  check_bw = 1;
+                  break;
+        case 'W':
+                  epoch = atoi(optarg);
+                  break;
+        case 'R':
+                  bw_var_limit = atoi(optarg);
+                  break;
+        case 'D':
+                  multipath_file = optarg;
                   break;
         default:
                   exit(1);
