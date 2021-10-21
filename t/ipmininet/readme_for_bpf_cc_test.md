@@ -4,6 +4,8 @@ This test aims to show the  use case where one flow starts with vegas as congest
 
 ## Install required softwares and libraries
 
+The test is done under ubuntu 21.04 with linux kernel 5.11.
+
 ```bash
 sudo apt install mininet
 sudo pip3 install mininet
