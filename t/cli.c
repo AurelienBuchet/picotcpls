@@ -77,7 +77,8 @@ typedef enum integration_test_t {
   T_ZERO_RTT_HANDSHAKE,
   T_PERF,
   T_AGGREGATION,
-  T_AGGREGATION_TIME /* same as aggregation, but timing to add a stream is controled by a timer rather than a number of bytes */
+  T_AGGREGATION_TIME, /* same as aggregation, but timing to add a stream is controled by a timer rather than a number of bytes */
+  T_MULTIPLEXING
 } integration_test_t;
 
 struct tcpls_options {
@@ -532,6 +533,50 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
   return 1;
 }
 
+static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *writeset){
+  static const size_t block_size = 4*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+  uint8_t buf[block_size];
+  tcpls_t *tcpls;
+  struct conn_to_tcpls *conntotcpls;
+  for (int i = 0; i < conn_tcpls->size; i++) {
+    conntotcpls = list_get(conn_tcpls, i);
+    tcpls = conntotcpls->tcpls;
+    printf("Sending to connection %d ; stream %d \n", i, conntotcpls->streamid);
+    if (FD_ISSET(conntotcpls->conn_fd, writeset) && conntotcpls->wants_to_write) {
+      int ret, ioret;
+      if (*inputfd > 0)
+        while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
+          ;
+      if (ioret > 0) {
+        if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) != 0) {
+          fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
+              ret, conntotcpls->streamid);
+          /*close(inputfd);*/
+          /*inputfd = -1;*/
+          return -1;
+        }
+        if (ret == TCPLS_HOLD_DATA_TO_SEND) {
+          fprintf(stderr, "sending %d bytes on stream %u; not everything has been sent \n", ioret, conntotcpls->streamid);
+        }
+      } else if (ioret == 0) {
+        /* closed */
+        fprintf(stderr, "End-of-file, closing the connection linked to stream id\
+            %u\n", conntotcpls->streamid);
+        conntotcpls->wants_to_write = 0;
+        tcpls_stream_close(tcpls->tls, conntotcpls->streamid, 1);
+        close(*inputfd);
+        *inputfd = -1;
+      }
+      else {
+        perror("read failed");
+        return -2;
+      }
+    }
+  }
+  /** continue */
+  return 1;
+}
+
 static int handle_server_zero_rtt_test(list_t *conn_tcpls, fd_set *readset) {
   int ret = 1;
   for (int i = 0; i < conn_tcpls->size; i++) {
@@ -598,14 +643,18 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
       break;
     }
   }
-  /** Write data for all tcpls_t * that wants to write :-) */
-  for (int i = 0; i < conn_tcpls->size; i++) {
-    struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
-    /** it is possible that wants_to_write gets updated by the reading bytes
-     * juste before */
-    if (FD_ISSET(conn->conn_fd, writeset) && conn->wants_to_write) {
-      /** Figure out the stream to send data */
-      ret = handle_tcpls_write(conn->tcpls, conn, inputfd);
+  if(test == T_MULTIPLEXING){
+    ret = handle_tcpls_multi_write(conn_tcpls, inputfd, writeset);
+  } else {
+    /** Write data for all tcpls_t * that wants to write :-) */
+    for (int i = 0; i < conn_tcpls->size; i++) {
+      struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
+      /** it is possible that wants_to_write gets updated by the reading bytes
+       * juste before */
+      if (FD_ISSET(conn->conn_fd, writeset) && conn->wants_to_write) {
+        /** Figure out the stream to send data */
+        ret = handle_tcpls_write(conn->tcpls, conn, inputfd);
+      }
     }
   }
   return ret;
@@ -683,7 +732,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   gettimeofday(&t_init, NULL);
   int ret;
   tcpls_buffer_t *recvbuf = tcpls_aggr_buffer_new(tcpls);
-  FILE *mtest = fopen("multipath_test.data", "w");
+  FILE *mtest = fopen("Files/multipath_test.data", "w");
   assert(mtest);
   if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
     ret = -1;
@@ -949,6 +998,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
       else
         printf("TEST 0-RTT: FAILURE\n");
       break;
+    case T_MULTIPLEXING:
     case T_SIMPLE_TRANSFER:
     case T_MULTIPATH:
     case T_AGGREGATION:
@@ -963,7 +1013,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
           fprintf(stderr, "tcpls_connect failed with err %d\n", err);
           return 1;
         }
-        if (test == T_MULTIPATH || test == T_AGGREGATION  || test == T_AGGREGATION_TIME){
+        if (test == T_MULTIPATH || test == T_AGGREGATION  || test == T_AGGREGATION_TIME || T_MULTIPLEXING){
           tcpls->enable_multipath = 1;
         }
         else {
@@ -1341,10 +1391,10 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             conntcpls.conn_fd = new_conn;
             conntcpls.wants_to_write = 0;
             conntcpls.tcpls = new_tcpls;
-            if (test == T_MULTIPATH || new_tcpls->enable_failover || test == T_AGGREGATION || test == T_AGGREGATION_TIME)
+            if (test == T_MULTIPATH || new_tcpls->enable_failover || test == T_AGGREGATION || test == T_AGGREGATION_TIME || test == T_MULTIPLEXING)
               conntcpls.tcpls->enable_multipath = 1;
 
-            if (test == T_SIMPLE_TRANSFER || test == T_MULTIPATH || test == T_AGGREGATION || test == T_AGGREGATION_TIME)
+            if (test == T_SIMPLE_TRANSFER || test == T_MULTIPATH || test == T_AGGREGATION || test == T_AGGREGATION_TIME || test == T_MULTIPLEXING)
               conntcpls.recvbuf = tcpls_aggr_buffer_new(conntcpls.tcpls);
             else
               conntcpls.recvbuf = tcpls_stream_buffers_new(conntcpls.tcpls, 2);
@@ -1363,6 +1413,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         case T_MULTIPATH:
         case T_AGGREGATION:
         case T_AGGREGATION_TIME:
+        case T_MULTIPLEXING:
           assert(input_file);
           if (!inputfd && (inputfd = open(input_file, O_RDONLY)) == -1) {
             fprintf(stderr, "failed to open file:%s:%s\n", input_file, strerror(errno));
@@ -1689,6 +1740,9 @@ int main(int argc, char **argv)
                   test = T_AGGREGATION;
                 else if (strcasecmp(optarg, "aggregation_time") == 0)
                   test = T_AGGREGATION_TIME;
+                else if (strcasecmp(optarg, "multiplexing") == 0){
+                  test = T_MULTIPLEXING;
+                }
                 else {
                   fprintf(stderr, "Unknown integration test: %s\n", optarg);
                   exit(1);
