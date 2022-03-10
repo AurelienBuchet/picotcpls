@@ -69,6 +69,11 @@ static void shift_buffer(ptls_buffer_t *buf, size_t delta)
   }
 }
 
+typedef enum scheduler_type_t {
+  S_ROUNDROBIN, 
+  S_PRIMARYBACKUP
+} scheduler_type_t;
+
 typedef enum integration_test_t {
   T_NOTEST,
   T_MULTIPATH,
@@ -247,10 +252,24 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
-          fprintf(stderr, "Setting streamid %u as wants to write\n", streamid);
-          conn_tcpls->streamid = streamid;
-          conn_tcpls->is_primary = 1;
-          conn_tcpls->wants_to_write = 1;
+          if(conn_tcpls->is_primary && conn_tcpls->streamid == 0){
+            fprintf(stderr, "Setting streamid %u as wants to write on primary connection\n", streamid);
+            conn_tcpls->streamid = streamid;
+            conn_tcpls->is_primary = 1;
+            conn_tcpls->wants_to_write = 1;
+          } else {
+            fprintf(stderr, "Setting streamid %u as wants to write\n", streamid);
+            struct conn_to_tcpls conntcpls;
+            memcpy(&conntcpls, conn_tcpls, sizeof(conntcpls));
+            conntcpls.streamid = streamid;
+            conntcpls.is_primary = 0;
+            conntcpls.wants_to_write = 1;
+            list_add(conn_tcpls_l, &conntcpls);
+          }
+          list_add(data->streamlist, &streamid);
+          //conn_tcpls->streamid = streamid;
+          //conn_tcpls->is_primary = 1;
+          break;
         }
       }
       break;
@@ -263,8 +282,8 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
         fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
-        if (tcpls == conn_tcpls->tcpls && conn_tcpls->transportid == transportid) {
-          fprintf(stderr, "Woh! we're stopping to write on the connection linked to transportid %d\n", transportid);
+        if (tcpls == conn_tcpls->tcpls && conn_tcpls->transportid == transportid && conn_tcpls->streamid == streamid) {
+          fprintf(stderr, "Woh! we're stopping to write on the connection linked to transportid %d streamid %u\n", transportid, streamid);
           conn_tcpls->wants_to_write = 0;
           conn_tcpls->is_primary = 0;
         }
@@ -533,7 +552,7 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
   return 1;
 }
 
-static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *writeset){
+static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *writeset, scheduler_type_t scheduler){
   static const size_t block_size = 4*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
   uint8_t buf[block_size];
   tcpls_t *tcpls;
@@ -541,13 +560,13 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
   for (int i = 0; i < conn_tcpls->size; i++) {
     conntotcpls = list_get(conn_tcpls, i);
     tcpls = conntotcpls->tcpls;
-    printf("Sending to connection %d ; stream %d \n", i, conntotcpls->streamid);
-    if (FD_ISSET(conntotcpls->conn_fd, writeset) && conntotcpls->wants_to_write) {
+    if (FD_ISSET(conntotcpls->conn_fd, writeset) && conntotcpls->wants_to_write && (scheduler == S_ROUNDROBIN || (scheduler == S_PRIMARYBACKUP && conntotcpls->is_primary))) {
       int ret, ioret;
       if (*inputfd > 0)
         while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
           ;
       if (ioret > 0) {
+        printf("Sending to connection %d ; stream %u \n", i, conntotcpls->streamid);
         if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) != 0) {
           fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
               ret, conntotcpls->streamid);
@@ -622,7 +641,7 @@ static int handle_server_perf_test(struct conn_to_tcpls *conn, fd_set
   return 0;
 }
 
-static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t test, int *inputfd, fd_set
+static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t test,scheduler_type_t scheduler ,int *inputfd, fd_set
     *readset, fd_set *writeset) {
   /** Now Read data for all tcpls_t * that wants to read */
   int ret = 1;
@@ -644,7 +663,7 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
     }
   }
   if(test == T_MULTIPLEXING){
-    ret = handle_tcpls_multi_write(conn_tcpls, inputfd, writeset);
+    ret = handle_tcpls_multi_write(conn_tcpls, inputfd, writeset, scheduler);
   } else {
     /** Write data for all tcpls_t * that wants to write :-) */
     for (int i = 0; i < conn_tcpls->size; i++) {
@@ -1267,7 +1286,7 @@ Exit:
 static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
     *sa_peers, int nbr_ours, int nbr_peers, ptls_context_t *ctx, const char *input_file,
     ptls_handshake_properties_t *hsprop, int request_key_update, integration_test_t test,
-    unsigned int failover_enabled)
+    scheduler_type_t scheduler, unsigned int failover_enabled)
 {
   int conn_fd, on = 1;
   int inputfd = 0;
@@ -1419,7 +1438,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             fprintf(stderr, "failed to open file:%s:%s\n", input_file, strerror(errno));
             goto Exit;
           }
-          if ((ret = handle_server_multipath_test(conn_tcpls, test, &inputfd,  &readset, &writeset)) < -1) {
+          if ((ret = handle_server_multipath_test(conn_tcpls, test, scheduler, &inputfd,  &readset, &writeset)) < -1) {
             goto Exit;
           }
           break;
@@ -1547,6 +1566,7 @@ static void usage(const char *cmd)
       "  -h                   print this help\n"
       "  -t                   Use tcpls\n"
       "  -T intergration_test Precise which integration test is to be run\n"
+      "  -m                   Multiplexing scheduler to use\n"
       "  -p v4_address        Peer's v4 IP address\n"
       "  -P v6_address        Peer's v6 IP address\n"
       "  -z v4_address        Our v4 IP address (not the default one) \n"
@@ -1585,6 +1605,7 @@ int main(int argc, char **argv)
   ptls_handshake_properties_t hsprop = {{{{NULL}}}};
   const char *host, *port, *input_file = NULL, *esni_file = NULL, *goodputfile = NULL;
   integration_test_t test = T_NOTEST;
+  scheduler_type_t scheduler = S_ROUNDROBIN;
   struct {
     ptls_key_exchange_context_t *elements[16];
     size_t count;
@@ -1599,7 +1620,7 @@ int main(int argc, char **argv)
   tcpls_options.peer_addrs6 = new_list(39*sizeof(char), 2);
   int family = 0;
 
-  while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:T:fg:")) != -1) {
+  while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:T:m:fg:")) != -1) {
     switch (ch) {
       case '4':
         family = AF_INET;
@@ -1740,15 +1761,23 @@ int main(int argc, char **argv)
                   test = T_AGGREGATION;
                 else if (strcasecmp(optarg, "aggregation_time") == 0)
                   test = T_AGGREGATION_TIME;
-                else if (strcasecmp(optarg, "multiplexing") == 0){
+                else if (strcasecmp(optarg, "multiplexing") == 0)
                   test = T_MULTIPLEXING;
-                }
                 else {
                   fprintf(stderr, "Unknown integration test: %s\n", optarg);
                   exit(1);
                 }
                 break;
-
+      case 'm':
+                if (strcasecmp(optarg, "roundrobin") == 0)
+                  scheduler = S_ROUNDROBIN;
+                else if (strcasecmp(optarg, "backup") == 0)
+                  scheduler = S_PRIMARYBACKUP;
+                else{
+                  fprintf(stderr, "Unknown scheduler: %s\n", optarg);
+                  exit(1);
+                }
+                break;                  
       case 'h':
                 usage(argv[0]);
                 exit(0);
@@ -1934,7 +1963,7 @@ int main(int argc, char **argv)
 
   if (is_server) {
     return run_server(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx,
-        input_file, &hsprop, request_key_update, test, tcpls_options.failover_enabled);
+        input_file, &hsprop, request_key_update, test,scheduler, tcpls_options.failover_enabled);
   } else {
     return run_client(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx,
         host, input_file, &hsprop, request_key_update, keep_sender_open, test, tcpls_options.failover_enabled, goodputfile);

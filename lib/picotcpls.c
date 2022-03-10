@@ -1145,7 +1145,9 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
   uint32_t streamid = htonl(stream->streamid);
   memcpy(input, &streamid, 4);
   /** queue the message in the sending buffer */
-  stream_send_control_message(tcpls->tls, stream->streamid, stream->sendbuf, stream->aead_enc, input, type, 4);
+  if (stream_send_control_message(tcpls->tls, stream->streamid, stream->sendbuf, stream->aead_enc, input, type, 4)){
+    printf("Error while closing stream %u", streamid);
+  }
   if (sendnow) {
     int ret;
     ret = do_send(tcpls, stream, con);
