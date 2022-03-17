@@ -266,7 +266,7 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
             conntcpls.wants_to_write = 1;
             list_add(conn_tcpls_l, &conntcpls);
           }
-          list_add(data->streamlist, &streamid);
+          // list_add(cbdata->streamlist, &streamid);
           //conn_tcpls->streamid = streamid;
           //conn_tcpls->is_primary = 1;
           break;
@@ -566,7 +566,7 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
         while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
           ;
       if (ioret > 0) {
-        printf("Sending to connection %d ; stream %u \n", i, conntotcpls->streamid);
+        //printf("Sending to connection %d ; stream %u \n", i, conntotcpls->streamid);
         if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) != 0) {
           fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
               ret, conntotcpls->streamid);
