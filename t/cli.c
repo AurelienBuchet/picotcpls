@@ -123,6 +123,7 @@ struct cli_data {
   list_t *streamlist;
   list_t *socktoremove;
   const char *goodputfile;
+  struct timeval timer;
 };
 
 static struct tcpls_options tcpls_options;
@@ -220,6 +221,7 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
       list_remove(data->streamlist, &streamid);
       break;
     case STREAM_CLOSED:
+      printf("time spent: %0.8f sec\n",time_diff(&(data->timer), &now));
       fprintf(stderr, "Handling STREAM_CLOSED callback, removing stream %u\n", streamid);
       list_remove(data->streamlist, &streamid);
       break;
@@ -745,7 +747,7 @@ Exit: {
 }
   return ret;
 }
-static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data *data) {
+static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data *data, int max_streams) {
   /** handshake*/
   struct timeval t_init, t_now;
   gettimeofday(&t_init, NULL);
@@ -762,6 +764,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   int has_migrated = 0;
   int has_remigrated = 0;
   int has_multipath =0;
+  int n_streams = 1;
   int received_data = 0;
   int mB_received = 0;
   struct timeval timeout;
@@ -951,6 +954,22 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         }
       }
     }
+    if(test == T_MULTIPLEXING && n_streams < max_streams) {
+        streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*) &tcpls->v4_addr_llist->addr);
+        struct timeval now;
+        struct tm *tm;
+        gettimeofday(&now, NULL);
+        tm = localtime(&now.tv_sec);
+        char timebuf[32], usecbuf[7];
+        strftime(timebuf, 32, "%H:%M:%S", tm);
+        strcat(timebuf, ".");
+        sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+        strcat(timebuf, usecbuf);
+        fprintf(stderr, "%s Sending a STREAM_ATTACH on the new path\n", timebuf);
+        if (tcpls_streams_attach(tcpls->tls, 0, 1) < 0)
+          fprintf(stderr, "Failed to attach stream %u\n", streamid);
+        n_streams++;
+    }
   }
   ret = 0;
 Exit:
@@ -1000,7 +1019,7 @@ static int handle_client_zero_rtt_test(tcpls_t *tcpls, struct cli_data *data) {
 }
 
 static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
-    integration_test_t test) {
+    integration_test_t test, int max_streams) {
   int ret;
   switch (test) {
     case T_SIMPLE_HANDSHAKE:
@@ -1022,6 +1041,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
     case T_MULTIPATH:
     case T_AGGREGATION:
     case T_AGGREGATION_TIME:
+    case T_MULTIPLEXING:
       {
         struct timeval timeout;
         timeout.tv_sec = 5;
@@ -1039,7 +1059,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
           if (tcpls->enable_failover)
             tcpls->enable_multipath = 1;
         }
-        ret = handle_client_transfer_test(tcpls, test, data);
+        ret = handle_client_transfer_test(tcpls, test, data, int max_streams);
       }
       break;
     case T_PERF:
@@ -1490,7 +1510,7 @@ Exit:
 static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
     *sa_peer, int nbr_our, int nbr_peer,  ptls_context_t *ctx, const char *server_name, const char
     *input_file, ptls_handshake_properties_t *hsprop, int request_key_update,
-    int keep_sender_open, integration_test_t test, unsigned int failover_enabled, const char *goodputfile)
+    int keep_sender_open, integration_test_t test, unsigned int failover_enabled, const char *goodputfile, int max_streams)
 {
   int fd;
 
@@ -1513,7 +1533,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   signal(SIGPIPE, sig_handler);
 
   if (ctx->support_tcpls_options) {
-    int ret = handle_client_connection(tcpls, &data, test);
+    int ret = handle_client_connection(tcpls, &data, test, max_streams);
     free(hsprop->client.esni_keys.base);
     tcpls_free(tcpls);
     return ret;
@@ -1566,7 +1586,7 @@ static void usage(const char *cmd)
       "  -h                   print this help\n"
       "  -t                   Use tcpls\n"
       "  -T intergration_test Precise which integration test is to be run\n"
-      "  -m                   Multiplexing scheduler to use\n"
+      "  -m                   Multiplexing stream number\n"
       "  -p v4_address        Peer's v4 IP address\n"
       "  -P v6_address        Peer's v6 IP address\n"
       "  -z v4_address        Our v4 IP address (not the default one) \n"
@@ -1606,6 +1626,7 @@ int main(int argc, char **argv)
   const char *host, *port, *input_file = NULL, *esni_file = NULL, *goodputfile = NULL;
   integration_test_t test = T_NOTEST;
   scheduler_type_t scheduler = S_ROUNDROBIN;
+  int max_stream = 1;
   struct {
     ptls_key_exchange_context_t *elements[16];
     size_t count;
@@ -1769,14 +1790,7 @@ int main(int argc, char **argv)
                 }
                 break;
       case 'm':
-                if (strcasecmp(optarg, "roundrobin") == 0)
-                  scheduler = S_ROUNDROBIN;
-                else if (strcasecmp(optarg, "backup") == 0)
-                  scheduler = S_PRIMARYBACKUP;
-                else{
-                  fprintf(stderr, "Unknown scheduler: %s\n", optarg);
-                  exit(1);
-                }
+                max_stream = atoi(optarg);
                 break;                  
       case 'h':
                 usage(argv[0]);
@@ -1966,6 +1980,6 @@ int main(int argc, char **argv)
         input_file, &hsprop, request_key_update, test,scheduler, tcpls_options.failover_enabled);
   } else {
     return run_client(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx,
-        host, input_file, &hsprop, request_key_update, keep_sender_open, test, tcpls_options.failover_enabled, goodputfile);
+        host, input_file, &hsprop, request_key_update, keep_sender_open, test, tcpls_options.failover_enabled, goodputfile, max_stream);
   }
 }
