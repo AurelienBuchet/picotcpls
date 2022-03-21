@@ -1041,7 +1041,6 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
     case T_MULTIPATH:
     case T_AGGREGATION:
     case T_AGGREGATION_TIME:
-    case T_MULTIPLEXING:
       {
         struct timeval timeout;
         timeout.tv_sec = 5;
@@ -1059,7 +1058,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
           if (tcpls->enable_failover)
             tcpls->enable_multipath = 1;
         }
-        ret = handle_client_transfer_test(tcpls, test, data, int max_streams);
+        ret = handle_client_transfer_test(tcpls, test, data,max_streams);
       }
       break;
     case T_PERF:
