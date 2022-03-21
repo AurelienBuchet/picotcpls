@@ -221,7 +221,8 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
       list_remove(data->streamlist, &streamid);
       break;
     case STREAM_CLOSED:
-      printf("time spent: %0.8f sec\n",time_diff(&(data->timer), &now));
+      struct timeval td = timediff(&(data->timer), &now);
+      printf("time spent: %0.8f sec\n",td.tv_sec + 1e-6*td.tv_usec);
       fprintf(stderr, "Handling STREAM_CLOSED callback, removing stream %u\n", streamid);
       list_remove(data->streamlist, &streamid);
       break;
@@ -774,6 +775,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     outputfile = fopen(data->goodputfile, "a");
   }
 
+  gettimeofday(&(data->timer), NULL)
 
   while (1) {
     /*cleanup*/
