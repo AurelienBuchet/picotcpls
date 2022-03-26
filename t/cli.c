@@ -220,7 +220,7 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
       fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback, removing stream %u\n", streamid);
       list_remove(data->streamlist, &streamid);
       break;
-    case STREAM_CLOSED:
+    case STREAM_CLOSED: ;
       struct timeval td = timediff(&now, &(data->timer));
       printf("time spent: %0.8f sec\n",td.tv_sec + 1e-6*td.tv_usec);
       fprintf(stderr, "Handling STREAM_CLOSED callback, removing stream %u\n", streamid);
@@ -385,6 +385,35 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       }
       break;
     default: break;
+  }
+  return 0;
+}
+
+static int handle_ping_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval tv, int transportid){
+  struct timeval now;
+  struct tm *tm;
+  gettimeofday(&now, NULL);
+  tm = localtime(&now.tv_sec);
+  char timebuf[32], usecbuf[7];
+  strftime(timebuf, 32, "%H:%M:%S", tm);
+  strcat(timebuf, ".");
+  sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+  strcat(timebuf, usecbuf);
+  fprintf(stderr, "%s ping event %d\n", timebuf, event);
+  switch (event) {
+    case PING_RTT_RECEIVED:
+      {
+        printf("ping");
+        break;
+      }
+    case PONG_RTT_RECEIVED:
+    {
+      printf("pong");
+      break;
+    }
+
+    default:
+      break;
   }
   return 0;
 }
@@ -1317,6 +1346,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   ctx->connection_event_cb = &handle_connection_event;
   ctx->stream_event_cb = &handle_stream_event;
   ctx->address_event_cb = &handle_address_event;
+  ctx->ping_event_cb = &handle_ping_event;
   ctx->cb_data = conn_tcpls;
   socklen_t salen;
   struct timeval timeout;
@@ -1527,6 +1557,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   ctx->cb_data = &data;
   ctx->stream_event_cb = &handle_client_stream_event;
   ctx->connection_event_cb = &handle_client_connection_event;
+  ctx->ping_event_cb = &handle_ping_event;
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   ctx->output_decrypted_tcpls_data = 0;

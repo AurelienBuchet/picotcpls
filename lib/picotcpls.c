@@ -20,6 +20,8 @@
  *   <li> tcpls_streams_attach </li> (Optional)
  *   <li> tcpls_stream_close </li> (Optional)
  *   <li> tcpls_free </li>
+ * 
+ *   <li> tcpls_ping_rtt </li> (Optional)
  * </ul>
  *
  * Callbacks can be attached to message events happening within TCPLS. E.g.,
@@ -1548,6 +1550,37 @@ int tcpls_set_bpf_cc(tcpls_t *tcpls, const uint8_t *bpf_prog_bytecode, size_t by
   return ret;
 }
 
+/**
+ * Sends a ping rtt message on the connection
+ */
+int tcpls_ping_rtt(tcpls_t *tcpls, int transportid){
+  connect_info_t *con = connection_get(tcpls, transportid);
+  if (!con)
+    return PTLS_ERROR_CONN_NOT_FOUND;
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  uint8_t message[4 + sizeof(struct timeval)];
+  transportid = htonl(transportid);
+  size_t message_len = sizeof(message);
+  if(message_len >= sizeof(uint32_t) + sizeof(struct timeval)){
+    memcpy(message, &transportid, 4);
+    memcpy(message + 4, &tv,sizeof(struct timeval));
+  } else{
+    return PTLS_ERROR_NO_MEMORY;
+  }
+
+  stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf,
+      tcpls->tls->traffic_protection.enc.aead, message, PING_RTT,
+                              message_len);
+  /* send the pong message right away */
+  if (do_send(tcpls, NULL, con) <= 0) {
+    //XXX
+    fprintf(stderr, "Unimplemented\n");
+    return -1;
+  }  
+  return 0;
+}
+
 /*===================================Internal========================================*/
 
 /**
@@ -2585,6 +2618,46 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         return setlocal_bpf_cc(ptls, bpf_prog, inputlen);
       }
       break;
+    case PING_RTT:
+      {
+        uint32_t peer_transportid = ntohl(*(uint32_t*) input);
+        struct timeval peer_timestamp = *(struct timeval*) &input[4];
+
+        connect_info_t *con = connection_get(ptls->tcpls, peer_transportid);
+        if (!con)
+          return PTLS_ERROR_CONN_NOT_FOUND;
+
+        if(ptls->ctx->ping_event_cb){
+          ptls->ctx->ping_event_cb(ptls->tcpls, PING_RTT_RECEIVED, peer_timestamp, con->this_transportid);
+        }
+        uint8_t message[4 + sizeof(struct timeval)];
+        peer_transportid = htonl(peer_transportid);
+        size_t message_len = sizeof(message);
+        if(message_len >= sizeof(uint32_t) + sizeof(struct timeval)){
+          memcpy(message, &peer_transportid, 4);
+          memcpy(message + 4, &peer_timestamp,sizeof(struct timeval));
+        } else{
+          return PTLS_ERROR_NO_MEMORY;
+        }
+
+        stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
+            ptls->traffic_protection.enc.aead, message, PONG_RTT,
+                                    message_len);
+        /* send the pong message right away */
+        if (do_send(ptls->tcpls, NULL, con) <= 0) {
+          //XXX
+          fprintf(stderr, "Unimplemented\n");
+        }
+        break;
+      }
+    case PONG_RTT: 
+      {
+        uint32_t peer_transportid = ntohl(*(uint32_t*) input);
+        struct timeval peer_timestamp = *(struct timeval*) &input[4];
+        if(ptls->ctx->ping_event_cb){
+          ptls->ctx->ping_event_cb(ptls->tcpls, PONG_RTT_RECEIVED, peer_timestamp, peer_transportid);
+        }
+      }
     default:
       fprintf(stderr, "Unsuported option?");
       return -1;

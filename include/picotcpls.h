@@ -52,6 +52,17 @@ typedef enum tcpls_enum_t {
   STREAM_CLOSE_ACK,
   TRANSPORT_NEW,
   TRANSPORT_UPDATE,
+    /**
+   * New stuff
+   */
+  PING_RTT,
+  PING_TCP,
+  PING_NAT,
+  PONG_RTT,
+  PONG_TCP,
+  PONG_NAT,
+  FLOW_CONTROL,
+
   /* since it is a protocol message (we do memcpy of this thing), make sure the
    * enum is compiled into a 32 bits representation */
   tcpls_enum_sentinel = 4294967295UL
@@ -69,7 +80,14 @@ typedef enum tcpls_event_t {
   ADD_ADDR,
   /* tells the app that we added an address! */
   ADDED_ADDR,
-  REMOVE_ADDR
+  REMOVE_ADDR,
+    /* ping events*/
+  PING_RTT_RECEIVED,
+  PING_TCP_RECEIVED,
+  PING_NAT_RECEIVED,
+  PONG_RTT_RECEIVED,
+  PONG_TCP_RECEIVED,
+  PONG_NAT_RECEIVED
 } tcpls_event_t;
 
 typedef enum tcpls_tcp_state_t {
@@ -389,6 +407,12 @@ int tcpls_set_bpf_scheduler(tcpls_t *tcpls, const uint8_t *bpf_prog_bytecode,
 int tcpls_send_tcpoption(tcpls_t *tcpls, int transportid, tcpls_enum_t type, int sendnow);
 
 void tcpls_free(tcpls_t *tcpls);
+
+/**
+ * New control calls
+ */
+
+int tcpls_ping_rtt(tcpls_t *tcpls, int transportid);
 
 /*============================================================================*/
 /** Internal to picotls */
