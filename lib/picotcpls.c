@@ -2781,7 +2781,9 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         sa_family_t family = *(sa_family_t*) &input[offset];
         offset += sizeof(sa_family_t); 
         if (family == AF_INET){
-          struct sockaddr_in con_sa = con->src->addr;
+          struct sockaddr_in con_sa;
+          socklen_t sa_len = sizeof(con_sa);
+          getsockname(con->socket, &con_sa, &sa_len);
           struct in_addr myIP = con_sa.sin_addr;
           unsigned int myPort = con_sa.sin_port;
           in_port_t myPortPeer = *(in_port_t*) &input[offset];
@@ -2801,7 +2803,9 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             printf("Peer port : %u\n", myPortPeer);
           }
         } else {
-          struct sockaddr_in6 con_sa = con->src6->addr;
+          struct sockaddr_in6 con_sa;
+          socklen_t sa_len = sizeof(con_sa);
+          getsockname(con->socket, &con_sa, &sa_len);         
           struct in6_addr myIP = con_sa.sin6_addr;
           unsigned int myPort = con_sa.sin6_port;
           in_port_t myPortPeer = *(in_port_t*) &input[offset];
