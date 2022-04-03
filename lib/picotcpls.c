@@ -1560,8 +1560,8 @@ int tcpls_ping_rtt(tcpls_t *tcpls, int transportid){
     return PTLS_ERROR_CONN_NOT_FOUND;
   int found = 0;
   tcpls_stream_t *stream_to_use;
-  for (int i = 0; i < ptls->tcpls->streams->size && !found; i++) {
-    stream_to_use = list_get(ptls->tcpls->streams, i);
+  for (int i = 0; i < tcpls->streams->size && !found; i++) {
+    stream_to_use = list_get(tcpls->streams, i);
     /** Find a stream attached to this con */
     if (stream_to_use->transportid == con->this_transportid) {
       found = 1;
@@ -1579,12 +1579,12 @@ int tcpls_ping_rtt(tcpls_t *tcpls, int transportid){
     return PTLS_ERROR_NO_MEMORY;
   }
   if (found) {
-    stream_send_control_message(ptls, stream_to_use->streamid,
+    stream_send_control_message(tcpls->tls, stream_to_use->streamid,
         stream_to_use->sendbuf, stream_to_use->aead_enc, message, PING_RTT, message_len);
   }
   else {
-    stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-        ptls->traffic_protection.enc.aead, message, PING_RTT,
+    stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf,
+        tcpls->tls->traffic_protection.enc.aead, message, PING_RTT,
                                 message_len);
   }
   /* send the pong message right away */
@@ -1605,8 +1605,8 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
     return PTLS_ERROR_CONN_NOT_FOUND;
     int found = 0;
   tcpls_stream_t *stream_to_use;
-  for (int i = 0; i < ptls->tcpls->streams->size && !found; i++) {
-    stream_to_use = list_get(ptls->tcpls->streams, i);
+  for (int i = 0; i < tcpls->streams->size && !found; i++) {
+    stream_to_use = list_get(tcpls->streams, i);
     /** Find a stream attached to this con */
     if (stream_to_use->transportid == con->this_transportid) {
       found = 1;
@@ -1622,12 +1622,12 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
   }
 
   if (found) {
-    stream_send_control_message(ptls, stream_to_use->streamid,
+    stream_send_control_message(tcpls->tls, stream_to_use->streamid,
         stream_to_use->sendbuf, stream_to_use->aead_enc, message, PING_NAT, message_len);
   }
   else {
-    stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-        ptls->traffic_protection.enc.aead, message, PING_NAT,
+    stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf,
+        tcpls->tls->traffic_protection.enc.aead, message, PING_NAT,
                                 message_len);
   }
   /* send the ping message right away */
