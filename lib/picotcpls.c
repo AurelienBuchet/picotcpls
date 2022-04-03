@@ -2700,13 +2700,14 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           ptls->ctx->ping_event_cb(ptls->tcpls, PING_NAT_RECEIVED, tv, con->this_transportid);
         }
 
-        struct sockaddr_in con_sa;
+        struct sockaddr_storage con_sa;
         socklen_t sa_len = sizeof(con_sa);
-        printf("sock %d\n", con->socket);
-        getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len);
+        if(getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len)){
+          printf("Failed to get socket name");
+        }
         int offset = 0;
-        if (con_sa.sin_family == AF_INET){
-          struct sockaddr_in con_sa = (struct sockaddr_in) con_sa;
+        if (con_sa.ss_family == AF_INET){
+          struct sockaddr_in con_sa = con->dest->addr;
           char myIP[16];
           unsigned int myPort;
           inet_ntop(AF_INET, &(con_sa.sin_addr), myIP, sizeof(myIP));
@@ -2734,7 +2735,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             return PTLS_ERROR_NO_MEMORY;
           }
         } else {
-          struct sockaddr_in6 con_sa = (struct sockaddr_in6) con_sa;
+          struct sockaddr_in6 con_sa = con->dest6->addr;
 
           char myIP[40];
           unsigned int myPort;
@@ -2767,10 +2768,58 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
     }
     case PONG_NAT:
     {
+        int offset = 0;
         uint32_t peer_transportid = ntohl(*(uint32_t*) input);
+        connect_info_t *con = connection_get(ptls->tcpls, peer_transportid);
+        if (!con)
+          return PTLS_ERROR_CONN_NOT_FOUND;
+        offset += 4;
         if(ptls->ctx->ping_event_cb){
           struct timeval tv;
-          ptls->ctx->ping_event_cb(ptls->tcpls, PONG_NAT_RECEIVED, tv, peer_transportid);
+          ptls->ctx->ping_event_cb(ptls->tcpls, PONG_NAT_RECEIVED, tv, con->this_transportid);
+        }
+        sa_family_t family = *(sa_family_t*) &input[offset];
+        offset += sizeof(sa_family_t); 
+        if (family == AF_INET){
+          struct sockaddr_in con_sa = con->src->addr;
+          struct in_addr myIP = con_sa.sin_addr;
+          unsigned int myPort = con_sa.sin_port;
+          in_port_t myPortPeer = *(in_port_t*) &input[offset];
+          offset += sizeof(in_port_t);
+          struct in_addr myIPPeer = *(struct in_addr*)&input[offset];
+          if(memcmp(&myPort, &myIPPeer, sizeof(in_port_t)) || memcmp(&myIP, &myIPPeer, sizeof(struct in_addr))){
+            printf("NAT detected : \n");
+            char myIPString[16];
+            inet_ntop(AF_INET, &(myIP), myIPString, sizeof(myIPString));
+            myPort = ntohs(myPort);
+            printf("Local ip address: %s\n", myIPString);
+            printf("Local port : %u\n", myPort);
+            char myIPPeerString[16];
+            inet_ntop(AF_INET, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
+            myPortPeer = ntohs(myPortPeer);
+            printf("Peer ip address: %s\n", myIPPeerString);
+            printf("Peer port : %u\n", myPortPeer);
+          }
+        } else {
+          struct sockaddr_in6 con_sa = con->src6->addr;
+          struct in6_addr myIP = con_sa.sin6_addr;
+          unsigned int myPort = con_sa.sin6_port;
+          in_port_t myPortPeer = *(in_port_t*) &input[offset];
+          offset += sizeof(in_port_t);
+          struct in6_addr myIPPeer = *(struct in6_addr*)&input[offset];
+          if(memcmp(&myPort, &myIPPeer, sizeof(in_port_t)) || memcmp(&myIP, &myIPPeer, sizeof(struct in6_addr))){
+            printf("NAT detected : \n");
+            char myIPString[40];
+            inet_ntop(AF_INET6, &(myIP), myIPString, sizeof(myIPString));
+            myPort = ntohs(myPort);
+            printf("Local ip address: %s\n", myIPString);
+            printf("Local port : %u\n", myPort);
+            char myIPPeerString[40];
+            inet_ntop(AF_INET6, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
+            myPortPeer = ntohs(myPortPeer);
+            printf("Peer ip address: %s\n", myIPPeerString);
+            printf("Peer port : %u\n", myPortPeer);
+          }
         }
         break;
     }

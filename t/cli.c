@@ -593,7 +593,7 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
 }
 
 static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *writeset, scheduler_type_t scheduler){
-  static const size_t block_size = 4*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+  static const size_t block_size = PTLS_MAX_ENCRYPTED_RECORD_SIZE;
   uint8_t buf[block_size];
   tcpls_t *tcpls;
   struct conn_to_tcpls *conntotcpls;

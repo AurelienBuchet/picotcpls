@@ -138,7 +138,7 @@ typedef struct st_connect_info_t {
   uint64_t tot_control_bytes_received;
   /** Id given for this connection */
   uint32_t this_transportid;
-  /** Id of the peer fort this connection */
+  /** Id of the peer for this connection */
   uint32_t peer_transportid;
   /** Is this connection primary? Primary means the default one */
   unsigned is_primary : 1;
