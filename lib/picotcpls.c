@@ -22,6 +22,7 @@
  *   <li> tcpls_free </li>
  * 
  *   <li> tcpls_ping_rtt </li> (Optional)
+ *   <li> tcpls_ping_nat </li> (Optional)
  * </ul>
  *
  * Callbacks can be attached to message events happening within TCPLS. E.g.,
@@ -1581,6 +1582,34 @@ int tcpls_ping_rtt(tcpls_t *tcpls, int transportid){
   return 0;
 }
 
+/**
+ * Sends a ping nat message on the connection
+ */
+int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
+  connect_info_t *con = connection_get(tcpls, transportid);
+  if (!con)
+    return PTLS_ERROR_CONN_NOT_FOUND;
+  uint8_t message[4];
+  transportid = htonl(transportid);
+  size_t message_len = sizeof(message);
+  if(message_len >= sizeof(uint32_t) ){
+    memcpy(message, &transportid, 4);
+  } else{
+    return PTLS_ERROR_NO_MEMORY;
+  }
+
+  stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf,
+      tcpls->tls->traffic_protection.enc.aead, message, PING_NAT,
+                              message_len);
+  /* send the ping message right away */
+  if (do_send(tcpls, NULL, con) <= 0) {
+    //XXX
+    fprintf(stderr, "Unimplemented\n");
+    return -1;
+  }  
+  return 0;
+}
+
 /*===================================Internal========================================*/
 
 /**
@@ -2657,7 +2686,94 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         if(ptls->ctx->ping_event_cb){
           ptls->ctx->ping_event_cb(ptls->tcpls, PONG_RTT_RECEIVED, peer_timestamp, peer_transportid);
         }
+        break;
       }
+    case PING_NAT:
+    {
+        uint32_t peer_transportid = ntohl(*(uint32_t*) input);
+        connect_info_t *con = connection_get(ptls->tcpls, peer_transportid);
+        if (!con)
+          return PTLS_ERROR_CONN_NOT_FOUND;
+
+        if(ptls->ctx->ping_event_cb){
+          struct timeval tv;
+          ptls->ctx->ping_event_cb(ptls->tcpls, PING_NAT_RECEIVED, tv, con->this_transportid);
+        }
+
+        struct sockaddr_in con_sa;
+        socklen_t sa_len = sizeof(con_sa);
+        printf("sock %d\n", con->socket);
+        getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len);
+        int offset = 0;
+        if (con_sa.sin_family == AF_INET){
+          struct sockaddr_in con_sa = (struct sockaddr_in) con_sa;
+          char myIP[16];
+          unsigned int myPort;
+          inet_ntop(AF_INET, &(con_sa.sin_addr), myIP, sizeof(myIP));
+          myPort = ntohs(con_sa.sin_port);
+          printf("Local ip address: %s\n", myIP);
+          printf("Local port : %u\n", myPort);
+
+          uint8_t message[4 + sizeof(sa_family_t) + sizeof(in_port_t) + sizeof(struct in_addr)];
+          peer_transportid = htonl(peer_transportid);
+          size_t message_len = sizeof(message);
+          if(message_len >= 4 + sizeof(sa_family_t) + sizeof(in_port_t) + sizeof(struct in_addr)){
+            memcpy(message + offset, &peer_transportid, 4);
+            offset += 4;
+            memcpy(message + offset, &(con_sa.sin_family), sizeof(sa_family_t));
+            offset +=  sizeof(sa_family_t);
+            memcpy(message + offset, &(con_sa.sin_port), sizeof(in_port_t));
+            offset += sizeof(in_port_t);
+            memcpy(message + offset, &(con_sa.sin_addr), sizeof(struct in_addr));
+            stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf, ptls->traffic_protection.enc.aead, message, PONG_NAT, message_len);
+            if (do_send(ptls->tcpls, NULL, con) <= 0) {
+              //XXX
+              fprintf(stderr, "Unimplemented\n");
+            }
+          } else{
+            return PTLS_ERROR_NO_MEMORY;
+          }
+        } else {
+          struct sockaddr_in6 con_sa = (struct sockaddr_in6) con_sa;
+
+          char myIP[40];
+          unsigned int myPort;
+          inet_ntop(AF_INET6, &(con_sa.sin6_addr), myIP, sizeof(myIP));
+          myPort = ntohs(con_sa.sin6_port);
+          printf("Local ip address: %s\n", myIP);
+          printf("Local port : %u\n", myPort);
+
+          uint8_t message[4 + sizeof(sa_family_t) + sizeof(in_port_t) + sizeof(struct in6_addr)];
+          peer_transportid = htonl(peer_transportid);
+          size_t message_len = sizeof(message);
+          if(message_len >= 4 + sizeof(sa_family_t) + sizeof(in_port_t) + sizeof(struct in6_addr)){
+            memcpy(message + offset, &peer_transportid, 4);
+            offset += 4;
+            memcpy(message + offset, &(con_sa.sin6_family), sizeof(sa_family_t));
+            offset +=  sizeof(sa_family_t);
+            memcpy(message + offset, &(con_sa.sin6_port), sizeof(in_port_t));
+            offset += sizeof(in_port_t);
+            memcpy(message + offset, &(con_sa.sin6_addr), sizeof(struct in6_addr));
+            stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf, ptls->traffic_protection.enc.aead, message, PONG_NAT, message_len);
+            if (do_send(ptls->tcpls, NULL, con) <= 0) {
+              //XXX
+              fprintf(stderr, "Unimplemented\n");
+            }
+          } else{
+            return PTLS_ERROR_NO_MEMORY;
+          }
+        }
+        break;
+    }
+    case PONG_NAT:
+    {
+        uint32_t peer_transportid = ntohl(*(uint32_t*) input);
+        if(ptls->ctx->ping_event_cb){
+          struct timeval tv;
+          ptls->ctx->ping_event_cb(ptls->tcpls, PONG_NAT_RECEIVED, tv, peer_transportid);
+        }
+        break;
+    }
     default:
       fprintf(stderr, "Unsuported option?");
       return -1;

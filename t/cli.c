@@ -403,12 +403,20 @@ static int handle_ping_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval
   switch (event) {
     case PING_RTT_RECEIVED:
       {
-        printf("ping");
         break;
       }
     case PONG_RTT_RECEIVED:
     {
-      printf("pong");
+      struct timeval td = timediff(&now, &tv);
+      printf("Estimated RTT : %0.8f sec\n",td.tv_sec + 1e-6*td.tv_usec);
+      break;
+    }
+    case PING_NAT_RECEIVED:
+    {
+      break;
+    }
+    case PONG_NAT_RECEIVED:
+    {
       break;
     }
 
@@ -790,6 +798,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     goto Exit;
   }
   printf("Handshake done\n");
+  tcpls_ping_nat(tcpls, 0);
   fd_set readfds, writefds, exceptfds;
   int has_migrated = 0;
   int has_remigrated = 0;
