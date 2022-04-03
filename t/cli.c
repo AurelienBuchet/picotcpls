@@ -83,7 +83,9 @@ typedef enum integration_test_t {
   T_PERF,
   T_AGGREGATION,
   T_AGGREGATION_TIME, /* same as aggregation, but timing to add a stream is controled by a timer rather than a number of bytes */
-  T_MULTIPLEXING
+  T_MULTIPLEXING,
+  T_RTT,
+  T_NAT
 } integration_test_t;
 
 struct tcpls_options {
@@ -215,6 +217,7 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
     case STREAM_OPENED:
       fprintf(stderr, "Handling STREAM_OPENED callback\n");
       list_add(data->streamlist, &streamid);
+      tcpls_ping_nat(tcpls, transportid);
       break;
     case STREAM_NETWORK_FAILURE:
       fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback, removing stream %u\n", streamid);
@@ -732,7 +735,6 @@ static int handle_client_perf_test(tcpls_t *tcpls, struct cli_data *data) {
   }
   printf("Downloading!\n");
   fd_set readfds, writefds, exceptfds;
-
   while (1) {
     /*cleanup*/
     int *socket;
@@ -798,7 +800,6 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     goto Exit;
   }
   printf("Handshake done\n");
-  tcpls_ping_nat(tcpls, 0);
   fd_set readfds, writefds, exceptfds;
   int has_migrated = 0;
   int has_remigrated = 0;
@@ -813,7 +814,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     outputfile = fopen(data->goodputfile, "a");
   }
 
-  gettimeofday(&(data->timer), NULL);
+  gettimeofday(&(data->timer), NULL);  
 
   while (1) {
     /*cleanup*/
@@ -1058,6 +1059,10 @@ static int handle_client_zero_rtt_test(tcpls_t *tcpls, struct cli_data *data) {
   return ret;
 }
 
+static int handle_client_ping_test(tcpls_t *tcpls,integration_test_t test, struct cli_data *data){
+
+}
+
 static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
     integration_test_t test, int max_streams) {
   int ret;
@@ -1117,6 +1122,21 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
         ret = handle_client_perf_test(tcpls, data);
         break;
       }
+    case T_RTT:
+    case T_NAT:
+    {
+        struct timeval timeout;
+        timeout.tv_sec = 5;
+        timeout.tv_usec = 0;
+
+        int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
+        if (err){
+          fprintf(stderr, "tcpls_connect failed with err %d\n", err);
+          return 1;
+        }
+        ret = handle_client_ping_test(tcpls, test, data);
+        break;
+    }
     case T_NOTEST:
       printf("NO TEST");
       exit(1);

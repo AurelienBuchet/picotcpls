@@ -1559,7 +1559,7 @@ int tcpls_ping_rtt(tcpls_t *tcpls, int transportid){
   if (!con)
     return PTLS_ERROR_CONN_NOT_FOUND;
   int found = 0;
-  tcpls_stream_t *stream_to_use;
+  tcpls_stream_t *stream_to_use = NULL;
   for (int i = 0; i < tcpls->streams->size && !found; i++) {
     stream_to_use = list_get(tcpls->streams, i);
     /** Find a stream attached to this con */
@@ -1587,8 +1587,8 @@ int tcpls_ping_rtt(tcpls_t *tcpls, int transportid){
         tcpls->tls->traffic_protection.enc.aead, message, PING_RTT,
                                 message_len);
   }
-  /* send the pong message right away */
-  if (do_send(tcpls, NULL, con) <= 0) {
+  /* send the ping message right away */
+  if (do_send(tcpls, stream_to_use, con) <= 0) {
     //XXX
     fprintf(stderr, "Unimplemented\n");
     return -1;
@@ -1604,7 +1604,7 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
   if (!con)
     return PTLS_ERROR_CONN_NOT_FOUND;
     int found = 0;
-  tcpls_stream_t *stream_to_use;
+  tcpls_stream_t *stream_to_use = NULL;
   for (int i = 0; i < tcpls->streams->size && !found; i++) {
     stream_to_use = list_get(tcpls->streams, i);
     /** Find a stream attached to this con */
@@ -1631,7 +1631,7 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
                                 message_len);
   }
   /* send the ping message right away */
-  if (do_send(tcpls, NULL, con) <= 0) {
+  if (do_send(tcpls, stream_to_use, con) <= 0) {
     //XXX
     fprintf(stderr, "Unimplemented\n");
     return -1;
@@ -2689,7 +2689,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           ptls->ctx->ping_event_cb(ptls->tcpls, PING_RTT_RECEIVED, peer_timestamp, con->this_transportid);
         }
         int found = 0;
-        tcpls_stream_t *stream_to_use;
+        tcpls_stream_t *stream_to_use = NULL;
         for (int i = 0; i < ptls->tcpls->streams->size && !found; i++) {
           stream_to_use = list_get(ptls->tcpls->streams, i);
           /** Find a stream attached to this con */
@@ -2716,7 +2716,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
                                       message_len);
         }
         /* send the pong message right away */
-        if (do_send(ptls->tcpls, NULL, con) <= 0) {
+        if (do_send(ptls->tcpls, stream_to_use, con) <= 0) {
           //XXX
           fprintf(stderr, "Unimplemented\n");
         }
@@ -2744,7 +2744,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         }
 
         int found = 0;
-        tcpls_stream_t *stream_to_use;
+        tcpls_stream_t *stream_to_use = NULL;
         for (int i = 0; i < ptls->tcpls->streams->size && !found; i++) {
           stream_to_use = list_get(ptls->tcpls->streams, i);
           /** Find a stream attached to this con */
@@ -2781,14 +2781,14 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             memcpy(message + offset, &(con_sa.sin_addr), sizeof(struct in_addr));
             if (found) {
               stream_send_control_message(ptls, stream_to_use->streamid,
-                  stream_to_use->sendbuf, stream_to_use->aead_enc, message, PONG_RTT, message_len);
+                  stream_to_use->sendbuf, stream_to_use->aead_enc, message, PONG_NAT, message_len);
             }
             else {
               stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-                  ptls->traffic_protection.enc.aead, message, PONG_RTT,
+                  ptls->traffic_protection.enc.aead, message, PONG_NAT,
                                           message_len);
             }
-            if (do_send(ptls->tcpls, NULL, con) <= 0) {
+            if (do_send(ptls->tcpls, stream_to_use, con) <= 0) {
               //XXX
               fprintf(stderr, "Unimplemented\n");
             }
@@ -2818,14 +2818,14 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             memcpy(message + offset, &(con_sa.sin6_addr), sizeof(struct in6_addr));
             if (found) {
               stream_send_control_message(ptls, stream_to_use->streamid,
-                  stream_to_use->sendbuf, stream_to_use->aead_enc, message, PONG_RTT, message_len);
+                  stream_to_use->sendbuf, stream_to_use->aead_enc, message, PONG_NAT, message_len);
             }
             else {
               stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-                  ptls->traffic_protection.enc.aead, message, PONG_RTT,
+                  ptls->traffic_protection.enc.aead, message, PONG_NAT,
                                           message_len);
             }
-            if (do_send(ptls->tcpls, NULL, con) <= 0) {
+            if (do_send(ptls->tcpls, stream_to_use, con) <= 0) {
               //XXX
               fprintf(stderr, "Unimplemented\n");
             }
