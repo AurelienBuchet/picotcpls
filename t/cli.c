@@ -255,7 +255,7 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
-          /*
+          
           if(conn_tcpls->is_primary && conn_tcpls->streamid == 0){
             fprintf(stderr, "Setting streamid %u as wants to write on primary connection\n", streamid);
             conn_tcpls->streamid = streamid;
@@ -269,11 +269,11 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
             conntcpls.is_primary = 0;
             conntcpls.wants_to_write = 1;
             list_add(conn_tcpls_l, &conntcpls);
-          }*/
-
+          }
+          /*
           conn_tcpls->streamid = streamid;
           conn_tcpls->is_primary = 1;
-          conn_tcpls->wants_to_write = 1;
+          conn_tcpls->wants_to_write = 1;*/
           break;
         }
       }
@@ -823,10 +823,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
 
   gettimeofday(&(data->timer), NULL);
 
-  tcpls_ping_nat(tcpls, 0);
 
-
-  //tcpls_limit_peer_con(tcpls, 0, 10000000);
 
   while (1) {
     /*cleanup*/
@@ -864,7 +861,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         received_data += ret;
         if (received_data / 1000000 > mB_received) {
           mB_received++;
-          //printf("Received %d MB\n",mB_received);
+          printf("Received %d MB\n",mB_received);
         }
         if (outputfile && ret >= 0) {
           /** write infos on this received data */
@@ -1021,6 +1018,10 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         if (tcpls_streams_attach(tcpls->tls, 0, 1) < 0)
           fprintf(stderr, "Failed to attach stream %u\n", streamid);
         n_streams++;
+    }
+    if(test == T_SIMPLE_TRANSFER && received_data >= 1000){
+        tcpls_ping_rtt(tcpls, 0);
+        tcpls_limit_peer_con(tcpls, 0, 100000);
     }
   }
   ret = 0;
