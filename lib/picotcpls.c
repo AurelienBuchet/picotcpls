@@ -1603,7 +1603,7 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
   connect_info_t *con = connection_get(tcpls, transportid);
   if (!con)
     return PTLS_ERROR_CONN_NOT_FOUND;
-    int found = 0;
+  int found = 0;
   tcpls_stream_t *stream_to_use = NULL;
   for (int i = 0; i < tcpls->streams->size && !found; i++) {
     stream_to_use = list_get(tcpls->streams, i);
@@ -2716,7 +2716,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
                                       message_len);
         }
         /* send the pong message right away */
-        if (do_send(ptls->tcpls, stream_to_use, con) <= 0) {
+        if(do_send(ptls->tcpls, stream_to_use, con) <= 0) {
           //XXX
           fprintf(stderr, "Unimplemented\n");
         }
@@ -2854,20 +2854,22 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           socklen_t sa_len = sizeof(con_sa);
           getsockname(con->socket, &con_sa, &sa_len);
           struct in_addr myIP = con_sa.sin_addr;
-          unsigned int myPort = con_sa.sin_port;
+          unsigned int myPort = ntohs(con_sa.sin_port);
           in_port_t myPortPeer = *(in_port_t*) &input[offset];
+          myPortPeer = ntohs(myPortPeer);
           offset += sizeof(in_port_t);
           struct in_addr myIPPeer = *(struct in_addr*)&input[offset];
-          if(memcmp(&myPort, &myIPPeer, sizeof(in_port_t)) || memcmp(&myIP, &myIPPeer, sizeof(struct in_addr))){
+
+          char myIPString[16];
+          inet_ntop(AF_INET, &(myIP), myIPString, sizeof(myIPString));
+          char myIPPeerString[16];
+          inet_ntop(AF_INET, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
+
+          if(strcmp(myIPString, myIPPeerString) || myPort != myPortPeer ){
             printf("NAT detected : \n");
-            char myIPString[16];
-            inet_ntop(AF_INET, &(myIP), myIPString, sizeof(myIPString));
-            myPort = ntohs(myPort);
+
             printf("Local ip address: %s\n", myIPString);
             printf("Local port : %u\n", myPort);
-            char myIPPeerString[16];
-            inet_ntop(AF_INET, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
-            myPortPeer = ntohs(myPortPeer);
             printf("Peer ip address: %s\n", myIPPeerString);
             printf("Peer port : %u\n", myPortPeer);
           }
@@ -2876,20 +2878,23 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           socklen_t sa_len = sizeof(con_sa);
           getsockname(con->socket, &con_sa, &sa_len);         
           struct in6_addr myIP = con_sa.sin6_addr;
-          unsigned int myPort = con_sa.sin6_port;
+          unsigned int myPort = ntohs(con_sa.sin6_port);
           in_port_t myPortPeer = *(in_port_t*) &input[offset];
+          myPortPeer = ntohs(myPortPeer);
           offset += sizeof(in_port_t);
+
           struct in6_addr myIPPeer = *(struct in6_addr*)&input[offset];
-          if(memcmp(&myPort, &myIPPeer, sizeof(in_port_t)) || memcmp(&myIP, &myIPPeer, sizeof(struct in6_addr))){
+          char myIPString[40];
+          inet_ntop(AF_INET6, &(myIP), myIPString, sizeof(myIPString));
+          char myIPPeerString[40];
+          inet_ntop(AF_INET6, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
+          if(strcmp(myIPString, myIPPeerString) || myPort != myPortPeer){
             printf("NAT detected : \n");
-            char myIPString[40];
-            inet_ntop(AF_INET6, &(myIP), myIPString, sizeof(myIPString));
+            
             myPort = ntohs(myPort);
             printf("Local ip address: %s\n", myIPString);
             printf("Local port : %u\n", myPort);
-            char myIPPeerString[40];
-            inet_ntop(AF_INET6, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
-            myPortPeer = ntohs(myPortPeer);
+
             printf("Peer ip address: %s\n", myIPPeerString);
             printf("Peer port : %u\n", myPortPeer);
           }
