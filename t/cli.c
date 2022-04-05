@@ -567,7 +567,10 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
     while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
       ;
   if (ioret > 0) {
-    if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) != 0) {
+    while((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) == TCPLS_CON_LIMIT_REACHED){
+
+    }
+    if(ret != 0) {
       fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
           ret, conntotcpls->streamid);
       /*close(inputfd);*/
@@ -609,7 +612,10 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
           ;
       if (ioret > 0) {
         //printf("Sending to connection %d ; stream %u \n", i, conntotcpls->streamid);
-        if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) != 0) {
+        while((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) == TCPLS_CON_LIMIT_REACHED){
+
+        }
+        if(ret != 0) {
           fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
               ret, conntotcpls->streamid);
           /*close(inputfd);*/
@@ -699,8 +705,9 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
       conn->recvbuf->decryptbuf->off = 0;
       if (ptls_handshake_is_complete(conn->tcpls->tls) && *inputfd > 0 &&
           (conn->is_primary || ((test == T_AGGREGATION  || test ==
-                                 T_AGGREGATION_TIME) && conn->streamid)))
+                                 T_AGGREGATION_TIME) && conn->streamid))){
         conn->wants_to_write = 1;
+      }
       break;
     }
   }
@@ -800,7 +807,6 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     goto Exit;
   }
   printf("Handshake done\n");
-  tcpls_ping_nat(tcpls, 0);
   fd_set readfds, writefds, exceptfds;
   int has_migrated = 0;
   int has_remigrated = 0;
@@ -816,6 +822,11 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   }
 
   gettimeofday(&(data->timer), NULL);
+
+  tcpls_ping_nat(tcpls, 0);
+
+
+  tcpls_limit_peer_con(tcpls, 0, 10000000);
 
   while (1) {
     /*cleanup*/
@@ -892,7 +903,6 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     /** consume received data */
     fwrite(recvbuf->decryptbuf->base, recvbuf->decryptbuf->off, 1, mtest);
     recvbuf->decryptbuf->off = 0;
-
     if (test == T_MULTIPATH && received_data >= 41457280  && !has_remigrated) {
       has_remigrated = 1;
       /*struct timeval timeout;*/
@@ -1479,6 +1489,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
               conntcpls.recvbuf = tcpls_aggr_buffer_new(conntcpls.tcpls);
             else
               conntcpls.recvbuf = tcpls_stream_buffers_new(conntcpls.tcpls, 2);
+
             list_add(tcpls_l, new_tcpls);
             /** ADD our ips  -- This might worth to be ctx and instance-based?*/
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);

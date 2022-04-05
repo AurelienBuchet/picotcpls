@@ -118,6 +118,8 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input, tcpl
 static int prepare_stream_attach(uint8_t *buf, size_t *len, uint32_t stream_id, uint32_t transportid, uint32_t offset);
 static int prepare_failover(uint8_t *buf, size_t *len, uint32_t peer_transportid, uint32_t streamid, uint32_t seq);
 
+static void refill_con_tokens(connect_info_t *con);
+
 /**
 * Create a new TCPLS object
 */
@@ -1271,6 +1273,14 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
   tcpls->sending_stream = stream;
   connect_info_t *con = connection_get(tcpls, stream->transportid);
 
+  if(con->is_limited){
+    refill_con_tokens(con);
+    if(con->tokens < nbytes){
+      return TCPLS_CON_LIMIT_REACHED;
+    }
+    con->tokens -= nbytes;
+  }
+
   // For compatibility with picotls; set the traffic_protection context
   // of the stream we want to use
   ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.enc.aead;
@@ -1621,7 +1631,12 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
     return PTLS_ERROR_NO_MEMORY;
   }
 
+  tcpls->sending_con = con;
+  tcpls->sending_stream = stream_to_use;
+
+
   if (found) {
+    printf("%ld ,%d, %p \n" , stream_to_use->streamid, stream_to_use->stream_usable, stream_to_use->aead_enc);
     stream_send_control_message(tcpls->tls, stream_to_use->streamid,
         stream_to_use->sendbuf, stream_to_use->aead_enc, message, PING_NAT, message_len);
   }
@@ -1638,6 +1653,47 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
   }  
   return 0;
 }
+
+/*
+ * Limit the connection (uplink)
+ */
+ int tcpls_limit_con(tcpls_t *tcpls, int transportid, uint64_t rate){
+  connect_info_t *con = connection_get(tcpls, transportid);
+  if (!con)
+    return PTLS_ERROR_CONN_NOT_FOUND;
+  con->is_limited = 1;
+  con->tokens = PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+  con->max_tokens = 4*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+  con->token_rate = rate;
+  gettimeofday(&(con->last_refill), NULL);
+  return 0;
+ }
+
+ int tcpls_limit_peer_con(tcpls_t *tcpls, int transportid, uint64_t rate){
+
+  connect_info_t *con = connection_get(tcpls, transportid);
+  if (!con)
+    return PTLS_ERROR_CONN_NOT_FOUND;
+  uint8_t message[sizeof(uint32_t) + sizeof(uint64_t)];
+  int message_len = sizeof(message);
+  int offset = 0;
+  transportid = htonl(transportid);
+  
+  if (message_len >= sizeof(uint32_t) + sizeof(uint64_t)) {
+      memcpy(message + offset, &transportid, 4);
+      offset += 4;
+      memcpy(message + offset, &rate, 8);
+  } else {
+    return PTLS_ERROR_NO_MEMORY;
+  }
+  stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf, tcpls->tls->traffic_protection.enc.aead,
+    message, FLOW_CONTROL, message_len);
+  if (do_send(tcpls, 0, con) <= 0) {
+    //XXX
+    fprintf(stderr, "Unimplemented\n");
+  }
+  return 0;
+ }
 
 /*===================================Internal========================================*/
 
@@ -1765,6 +1821,7 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
   }
   /* finally try with the default aead */
   if (rret == PTLS_ALERT_BAD_RECORD_MAC) {
+    printf("yoyo\n");
     if (restore_buf && tcpls->buffrag->capacity)
       tcpls->buffrag->off = restore_buf;
     /* That MUST be a control message */
@@ -2756,17 +2813,11 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         struct sockaddr_storage con_sa;
         socklen_t sa_len = sizeof(con_sa);
         if(getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len)){
-          printf("Failed to get socket name");
+          fprintf(stderr, "Failed to get socket name");
         }
         int offset = 0;
         if (con_sa.ss_family == AF_INET){
           struct sockaddr_in con_sa = con->dest->addr;
-          char myIP[16];
-          unsigned int myPort;
-          inet_ntop(AF_INET, &(con_sa.sin_addr), myIP, sizeof(myIP));
-          myPort = ntohs(con_sa.sin_port);
-          printf("Local ip address: %s\n", myIP);
-          printf("Local port : %u\n", myPort);
 
           uint8_t message[4 + sizeof(sa_family_t) + sizeof(in_port_t) + sizeof(struct in_addr)];
           peer_transportid = htonl(peer_transportid);
@@ -2779,6 +2830,8 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             memcpy(message + offset, &(con_sa.sin_port), sizeof(in_port_t));
             offset += sizeof(in_port_t);
             memcpy(message + offset, &(con_sa.sin_addr), sizeof(struct in_addr));
+            found = 0;
+            stream_to_use = NULL;
             if (found) {
               stream_send_control_message(ptls, stream_to_use->streamid,
                   stream_to_use->sendbuf, stream_to_use->aead_enc, message, PONG_NAT, message_len);
@@ -2798,13 +2851,6 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         } else {
           struct sockaddr_in6 con_sa = con->dest6->addr;
 
-          char myIP[40];
-          unsigned int myPort;
-          inet_ntop(AF_INET6, &(con_sa.sin6_addr), myIP, sizeof(myIP));
-          myPort = ntohs(con_sa.sin6_port);
-          printf("Local ip address: %s\n", myIP);
-          printf("Local port : %u\n", myPort);
-
           uint8_t message[4 + sizeof(sa_family_t) + sizeof(in_port_t) + sizeof(struct in6_addr)];
           peer_transportid = htonl(peer_transportid);
           size_t message_len = sizeof(message);
@@ -2816,6 +2862,8 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             memcpy(message + offset, &(con_sa.sin6_port), sizeof(in_port_t));
             offset += sizeof(in_port_t);
             memcpy(message + offset, &(con_sa.sin6_addr), sizeof(struct in6_addr));
+            found = 0;
+            stream_to_use = NULL;
             if (found) {
               stream_send_control_message(ptls, stream_to_use->streamid,
                   stream_to_use->sendbuf, stream_to_use->aead_enc, message, PONG_NAT, message_len);
@@ -2896,6 +2944,19 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           }
         }
         break;
+    }
+    case FLOW_CONTROL:
+    {
+      uint32_t peer_transportid = ntohl(*(uint32_t*) input);
+      uint64_t limit_rate = *(uint64_t *) &input[4];
+
+      connect_info_t *con = connection_get(ptls->tcpls, peer_transportid);
+      if (!con)
+        return PTLS_ERROR_CONN_NOT_FOUND;
+      
+      tcpls_limit_con(ptls->tcpls, peer_transportid, limit_rate);
+
+      break;
     }
     default:
       fprintf(stderr, "Unsuported option?");
@@ -3363,6 +3424,8 @@ static void shift_buffer(ptls_buffer_t *buf, size_t delta) {
 }
 
 
+
+
 /**
  * Compute the time difference between t_current and t_init
  */
@@ -3376,6 +3439,20 @@ static struct timeval timediff(struct timeval *t_current, struct timeval *t_init
     diff.tv_sec--;
   }
   return diff;
+}
+
+/**
+ * Refill the tokens of the given connection 
+ */
+static void refill_con_tokens(connect_info_t *con){
+  struct timeval now;
+  gettimeofday(&now, NULL);
+  struct timeval diff = timediff(&now, &(con->last_refill));
+  con->tokens = con->tokens + (diff.tv_sec * con->token_rate) + ((diff.tv_usec * con->token_rate) / 1000000);
+  if(con->tokens > con->max_tokens){
+    con->tokens = con->max_tokens;
+  }
+  con->last_refill = now;
 }
 
 /**
