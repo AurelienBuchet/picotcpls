@@ -1613,15 +1613,6 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
   connect_info_t *con = connection_get(tcpls, transportid);
   if (!con)
     return PTLS_ERROR_CONN_NOT_FOUND;
-  int found = 0;
-  tcpls_stream_t *stream_to_use = NULL;
-  for (int i = 0; i < tcpls->streams->size && !found; i++) {
-    stream_to_use = list_get(tcpls->streams, i);
-    /** Find a stream attached to this con */
-    if (stream_to_use->transportid == con->this_transportid) {
-      found = 1;
-    }
-  }
   uint8_t message[4];
   transportid = htonl(transportid);
   size_t message_len = sizeof(message);
@@ -1632,21 +1623,16 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
   }
 
   tcpls->sending_con = con;
-  tcpls->sending_stream = stream_to_use;
+  tcpls->sending_stream = NULL;
 
 
-  if (found) {
-    printf("%ld ,%d, %p \n" , stream_to_use->streamid, stream_to_use->stream_usable, stream_to_use->aead_enc);
-    stream_send_control_message(tcpls->tls, stream_to_use->streamid,
-        stream_to_use->sendbuf, stream_to_use->aead_enc, message, PING_NAT, message_len);
-  }
-  else {
-    stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf,
-        tcpls->tls->traffic_protection.enc.aead, message, PING_NAT,
-                                message_len);
-  }
+
+  stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf,
+      tcpls->tls->traffic_protection.enc.aead, message, PING_NAT,
+                              message_len);
+  
   /* send the ping message right away */
-  if (do_send(tcpls, stream_to_use, con) <= 0) {
+  if (do_send(tcpls, NULL, con) <= 0) {
     //XXX
     fprintf(stderr, "Unimplemented\n");
     return -1;
@@ -2800,22 +2786,12 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           ptls->ctx->ping_event_cb(ptls->tcpls, PING_NAT_RECEIVED, tv, con->this_transportid);
         }
 
-        int found = 0;
-        tcpls_stream_t *stream_to_use = NULL;
-        for (int i = 0; i < ptls->tcpls->streams->size && !found; i++) {
-          stream_to_use = list_get(ptls->tcpls->streams, i);
-          /** Find a stream attached to this con */
-          if (stream_to_use->transportid == con->this_transportid) {
-            found = 1;
-          }
-        }
-
+        int offset = 0;
         struct sockaddr_storage con_sa;
         socklen_t sa_len = sizeof(con_sa);
         if(getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len)){
-          fprintf(stderr, "Failed to get socket name");
+          printf("Failed to get socket name");
         }
-        int offset = 0;
         if (con_sa.ss_family == AF_INET){
           struct sockaddr_in con_sa = con->dest->addr;
 
@@ -2830,18 +2806,15 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             memcpy(message + offset, &(con_sa.sin_port), sizeof(in_port_t));
             offset += sizeof(in_port_t);
             memcpy(message + offset, &(con_sa.sin_addr), sizeof(struct in_addr));
-            found = 0;
-            stream_to_use = NULL;
-            if (found) {
-              stream_send_control_message(ptls, stream_to_use->streamid,
-                  stream_to_use->sendbuf, stream_to_use->aead_enc, message, PONG_NAT, message_len);
-            }
-            else {
-              stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-                  ptls->traffic_protection.enc.aead, message, PONG_NAT,
-                                          message_len);
-            }
-            if (do_send(ptls->tcpls, stream_to_use, con) <= 0) {
+
+            ptls->tcpls->sending_stream = NULL;
+            ptls->tcpls->sending_con = con; 
+
+            stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
+                ptls->traffic_protection.enc.aead, message, PONG_NAT,
+                                        message_len);
+            
+            if (do_send(ptls->tcpls, NULL, con) <= 0) {
               //XXX
               fprintf(stderr, "Unimplemented\n");
             }
@@ -2862,18 +2835,14 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             memcpy(message + offset, &(con_sa.sin6_port), sizeof(in_port_t));
             offset += sizeof(in_port_t);
             memcpy(message + offset, &(con_sa.sin6_addr), sizeof(struct in6_addr));
-            found = 0;
-            stream_to_use = NULL;
-            if (found) {
-              stream_send_control_message(ptls, stream_to_use->streamid,
-                  stream_to_use->sendbuf, stream_to_use->aead_enc, message, PONG_NAT, message_len);
-            }
-            else {
-              stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-                  ptls->traffic_protection.enc.aead, message, PONG_NAT,
-                                          message_len);
-            }
-            if (do_send(ptls->tcpls, stream_to_use, con) <= 0) {
+            ptls->tcpls->sending_stream = NULL;
+            ptls->tcpls->sending_con = con; 
+
+            stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
+                ptls->traffic_protection.enc.aead, message, PONG_NAT,
+                                        message_len);
+            
+            if (do_send(ptls->tcpls, NULL, con) <= 0) {
               //XXX
               fprintf(stderr, "Unimplemented\n");
             }
@@ -2898,7 +2867,11 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         sa_family_t family = *(sa_family_t*) &input[offset];
         offset += sizeof(sa_family_t); 
         if (family == AF_INET){
-          struct sockaddr_in con_sa = con->src->addr;
+          struct sockaddr_in con_sa;
+          socklen_t sa_len = sizeof(con_sa);
+          if(getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len)){
+            printf("Failed to get socket name");
+          }
           struct in_addr myIP = con_sa.sin_addr;
           unsigned int myPort = ntohs(con_sa.sin_port);
           in_port_t myPortPeer = *(in_port_t*) &input[offset];
@@ -2920,7 +2893,11 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             printf("Peer port : %u\n", myPortPeer);
           }
         } else {
-          struct sockaddr_in6 con_sa = con->src6->addr;
+          struct sockaddr_in6 con_sa;
+          socklen_t sa_len = sizeof(con_sa);
+          if(getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len)){
+            printf("Failed to get socket name");
+          }          
           struct in6_addr myIP = con_sa.sin6_addr;
           unsigned int myPort = ntohs(con_sa.sin6_port);
           in_port_t myPortPeer = *(in_port_t*) &input[offset];

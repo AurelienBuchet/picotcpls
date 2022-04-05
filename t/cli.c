@@ -826,7 +826,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   tcpls_ping_nat(tcpls, 0);
 
 
-  tcpls_limit_peer_con(tcpls, 0, 10000000);
+  //tcpls_limit_peer_con(tcpls, 0, 10000000);
 
   while (1) {
     /*cleanup*/
@@ -935,7 +935,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
         strcat(timebuf, usecbuf);
         fprintf(stderr, "%s Sending a STREAM_ATTACH on the new path\n", timebuf);
-        if (tcpls_streams_attach(tcpls->tls, streamid, 1) < 0)
+        if (tcpls_streams_attach(tcpls->tls, 0, 1) < 0)
           fprintf(stderr, "Failed to attach stream %u\n", streamid);
         else
           /** closing the stream id 1 */
