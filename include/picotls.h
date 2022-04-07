@@ -879,9 +879,17 @@ typedef struct st_ptls_log_event_t {
      */
     int (*address_event_cb)(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr *addr);
     /**
-     * A callback used when a ping event occurs
+     * A callback used when a rtt event occurs
      */
-    int (*ping_event_cb)(tcpls_t *tcpls, tcpls_event_t event, struct timeval tv, int transportid);
+    int (*rtt_event_cb)(tcpls_t *tcpls, tcpls_event_t event, struct timeval tv, int transportid);
+    /**
+     * A callback used when a nat event occurs
+     */
+    int (*nat_event_cb)(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr *, int transportid);
+    /**
+     * A callback used when a tcpinfo event occurs
+     */
+    int (*info_event_cb)(tcpls_t *tcpls, tcpls_event_t event, struct tcp_info infos, int transportid);
     /**
      * Optional data to be passed to the callback functions
      */

@@ -4618,8 +4618,10 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
     if (tls->traffic_protection.dec.aead != NULL && rec.type != PTLS_CONTENT_TYPE_ALERT) {
         size_t decrypted_length;
         /** For middlebox compatibility */
-        if (rec.type != PTLS_CONTENT_TYPE_APPDATA)
+        if (rec.type != PTLS_CONTENT_TYPE_APPDATA && rec.type != PTLS_CONTENT_TYPE_TCPLS_CONTROL){
+            printf("ayo\n");
             return PTLS_ALERT_HANDSHAKE_FAILURE;
+        }
         if ((ret = ptls_buffer_reserve(decryptbuf, offset + rec.length)) != 0)
             return ret;
         if ((ret = aead_decrypt(tls->traffic_protection.dec.aead, decryptbuf->base +

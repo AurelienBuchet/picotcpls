@@ -428,6 +428,8 @@ int tcpls_ping_rtt(tcpls_t *tcpls, int transportid);
 
 int tcpls_ping_nat(tcpls_t *tcpls, int transportid);
 
+int tcpls_ping_tcp(tcpls_t *tcpls, int transportid);
+
 int tcpls_limit_con(tcpls_t *tcpls, int transportid, uint64_t rate);
 
 int tcpls_limit_peer_con(tcpls_t *tcpls, int transportid, uint64_t rate);
