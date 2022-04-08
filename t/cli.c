@@ -258,7 +258,7 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
-          /*
+          
           if(conn_tcpls->is_primary && conn_tcpls->streamid == 0){
             fprintf(stderr, "Setting streamid %u as wants to write on primary connection\n", streamid);
             conn_tcpls->streamid = streamid;
@@ -272,11 +272,11 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
             conntcpls.is_primary = 0;
             conntcpls.wants_to_write = 1;
             list_add(conn_tcpls_l, &conntcpls);
-          }*/
-
+          }
+          /*
           conn_tcpls->streamid = streamid;
           conn_tcpls->is_primary = 1;
-          conn_tcpls->wants_to_write = 1;
+          conn_tcpls->wants_to_write = 1;*/
           break;
         }
       }
@@ -570,7 +570,10 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
     while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
       ;
   if (ioret > 0) {
-    if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) != 0) {
+    while((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) == TCPLS_CON_LIMIT_REACHED){
+
+    }
+    if(ret != 0) {
       fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
           ret, conntotcpls->streamid);
       /*close(inputfd);*/
@@ -612,7 +615,10 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
           ;
       if (ioret > 0) {
         //printf("Sending to connection %d ; stream %u \n", i, conntotcpls->streamid);
-        if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) != 0) {
+        while((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) == TCPLS_CON_LIMIT_REACHED){
+
+        }
+        if(ret != 0) {
           fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
               ret, conntotcpls->streamid);
           /*close(inputfd);*/
@@ -702,8 +708,9 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
       conn->recvbuf->decryptbuf->off = 0;
       if (ptls_handshake_is_complete(conn->tcpls->tls) && *inputfd > 0 &&
           (conn->is_primary || ((test == T_AGGREGATION  || test ==
-                                 T_AGGREGATION_TIME) && conn->streamid)))
+                                 T_AGGREGATION_TIME) && conn->streamid))){
         conn->wants_to_write = 1;
+      }
       break;
     }
   }
@@ -818,6 +825,8 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
 
   gettimeofday(&(data->timer), NULL);  
 
+
+
   while (1) {
     /*cleanup*/
     int *socket;
@@ -854,7 +863,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         received_data += ret;
         if (received_data / 1000000 > mB_received) {
           mB_received++;
-          //printf("Received %d MB\n",mB_received);
+          printf("Received %d MB\n",mB_received);
         }
         if (outputfile && ret >= 0) {
           /** write infos on this received data */
@@ -893,7 +902,6 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     /** consume received data */
     fwrite(recvbuf->decryptbuf->base, recvbuf->decryptbuf->off, 1, mtest);
     recvbuf->decryptbuf->off = 0;
-
     if (test == T_MULTIPATH && received_data >= 41457280  && !has_remigrated) {
       has_remigrated = 1;
       /*struct timeval timeout;*/
@@ -926,7 +934,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
         strcat(timebuf, usecbuf);
         fprintf(stderr, "%s Sending a STREAM_ATTACH on the new path\n", timebuf);
-        if (tcpls_streams_attach(tcpls->tls, streamid, 1) < 0)
+        if (tcpls_streams_attach(tcpls->tls, 0, 1) < 0)
           fprintf(stderr, "Failed to attach stream %u\n", streamid);
         else
           /** closing the stream id 1 */
@@ -1012,6 +1020,10 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         if (tcpls_streams_attach(tcpls->tls, 0, 1) < 0)
           fprintf(stderr, "Failed to attach stream %u\n", streamid);
         n_streams++;
+    }
+    if(test == T_SIMPLE_TRANSFER && received_data >= 1000){
+        tcpls_ping_rtt(tcpls, 0);
+        tcpls_limit_peer_con(tcpls, 0, 100000);
     }
   }
   ret = 0;
@@ -1499,6 +1511,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
               conntcpls.recvbuf = tcpls_aggr_buffer_new(conntcpls.tcpls);
             else
               conntcpls.recvbuf = tcpls_stream_buffers_new(conntcpls.tcpls, 2);
+
             list_add(tcpls_l, new_tcpls);
             /** ADD our ips  -- This might worth to be ctx and instance-based?*/
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);

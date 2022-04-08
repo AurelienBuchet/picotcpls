@@ -18,6 +18,9 @@
 #define TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ 2
 #define TCPLS_HOLD_DATA_TO_SEND 3
 
+// Flow control error
+#define TCPLS_CON_LIMIT_REACHED 4
+
 #define COOKIE_LEN 16
 #define CONNID_LEN 16
 
@@ -81,13 +84,15 @@ typedef enum tcpls_event_t {
   /* tells the app that we added an address! */
   ADDED_ADDR,
   REMOVE_ADDR,
-    /* ping events*/
+  /* ping events*/
   PING_RTT_RECEIVED,
   PING_TCP_RECEIVED,
   PING_NAT_RECEIVED,
   PONG_RTT_RECEIVED,
   PONG_TCP_RECEIVED,
-  PONG_NAT_RECEIVED
+  PONG_NAT_RECEIVED,
+
+  FLOW_CONTROL_RECEIVED
 } tcpls_event_t;
 
 typedef enum tcpls_tcp_state_t {
@@ -158,6 +163,13 @@ typedef struct st_connect_info_t {
   /** only one is used */
   tcpls_v4_addr_t *dest;
   tcpls_v6_addr_t *dest6;
+
+  /** Information of flow control */
+  unsigned is_limited : 1;
+  uint64_t tokens;
+  uint64_t max_tokens;
+  uint64_t token_rate;
+  struct timeval last_refill;
 
 } connect_info_t;
 
@@ -413,6 +425,13 @@ void tcpls_free(tcpls_t *tcpls);
  */
 
 int tcpls_ping_rtt(tcpls_t *tcpls, int transportid);
+
+int tcpls_ping_nat(tcpls_t *tcpls, int transportid);
+
+int tcpls_limit_con(tcpls_t *tcpls, int transportid, uint64_t rate);
+
+int tcpls_limit_peer_con(tcpls_t *tcpls, int transportid, uint64_t rate);
+
 
 /*============================================================================*/
 /** Internal to picotls */
