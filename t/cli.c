@@ -416,15 +416,6 @@ static int handle_ping_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval
       printf("Estimated RTT : %0.8f sec\n",td.tv_sec + 1e-6*td.tv_usec);
       break;
     }
-    case PING_NAT_RECEIVED:
-    {
-      break;
-    }
-    case PONG_NAT_RECEIVED:
-    {
-      break;
-    }
-
     default:
       break;
   }
@@ -696,6 +687,7 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
     *readset, fd_set *writeset) {
   /** Now Read data for all tcpls_t * that wants to read */
   int ret = 1;
+
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
     if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
@@ -825,7 +817,8 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
 
   gettimeofday(&(data->timer), NULL);  
 
-
+  //tcpls_limit_peer_con(tcpls, 0, 1000000);
+  //tcpls_ping_tcp(tcpls, 0);
 
   while (1) {
     /*cleanup*/
@@ -1020,10 +1013,6 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         if (tcpls_streams_attach(tcpls->tls, 0, 1) < 0)
           fprintf(stderr, "Failed to attach stream %u\n", streamid);
         n_streams++;
-    }
-    if(test == T_SIMPLE_TRANSFER && received_data >= 1000){
-        tcpls_ping_rtt(tcpls, 0);
-        tcpls_limit_peer_con(tcpls, 0, 100000);
     }
   }
   ret = 0;
@@ -1389,7 +1378,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   ctx->connection_event_cb = &handle_connection_event;
   ctx->stream_event_cb = &handle_stream_event;
   ctx->address_event_cb = &handle_address_event;
-  ctx->ping_event_cb = &handle_ping_event;
+  ctx->rtt_event_cb = &handle_ping_event;
   ctx->cb_data = conn_tcpls;
   socklen_t salen;
   struct timeval timeout;
@@ -1601,7 +1590,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   ctx->cb_data = &data;
   ctx->stream_event_cb = &handle_client_stream_event;
   ctx->connection_event_cb = &handle_client_connection_event;
-  ctx->ping_event_cb = &handle_ping_event;
+  ctx->rtt_event_cb = &handle_ping_event;
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   ctx->output_decrypted_tcpls_data = 0;
