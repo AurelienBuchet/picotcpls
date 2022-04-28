@@ -4619,7 +4619,6 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
         size_t decrypted_length;
         /** For middlebox compatibility */
         if (rec.type != PTLS_CONTENT_TYPE_APPDATA && rec.type != PTLS_CONTENT_TYPE_TCPLS_CONTROL){
-            printf("ayo\n");
             return PTLS_ALERT_HANDSHAKE_FAILURE;
         }
         if ((ret = ptls_buffer_reserve(decryptbuf, offset + rec.length)) != 0)

@@ -1474,10 +1474,12 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         /*fprintf(stderr, "waiting for connection or r/w event...\n");*/
       } while (select(maxfd+1, &readset, &writeset, NULL, &timeout) == -1);
       /** Check first we have a listen() connection */
+
       for (int i = 0; i < nbr_ours; i++) {
         if (FD_ISSET(listenfd[i], &readset)) {
           struct sockaddr_storage ss;
           socklen_t slen = sizeof(ss);
+          printf("helo\n");
           int new_conn = accept(listenfd[i], (struct sockaddr *)&ss, &slen);
           if (new_conn < 0) {
             perror("accept");
