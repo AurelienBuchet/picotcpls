@@ -4618,17 +4618,25 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
     if (tls->traffic_protection.dec.aead != NULL && rec.type != PTLS_CONTENT_TYPE_ALERT) {
         size_t decrypted_length;
         /** For middlebox compatibility */
-        if (rec.type != PTLS_CONTENT_TYPE_APPDATA && rec.type != PTLS_CONTENT_TYPE_TCPLS_CONTROL){
+        if (rec.type != PTLS_CONTENT_TYPE_APPDATA){
             return PTLS_ALERT_HANDSHAKE_FAILURE;
         }
         if ((ret = ptls_buffer_reserve(decryptbuf, offset + rec.length)) != 0)
             return ret;
-        if ((ret = aead_decrypt(tls->traffic_protection.dec.aead, decryptbuf->base +
-                decryptbuf->off, &decrypted_length, rec.fragment, rec.length))
-            != 0) {
-            if (tls->is_server && tls->server.early_data_skipped_bytes != UINT32_MAX)
-                goto ServerSkipEarlyData;
-            return ret;
+        
+        int n_decrypt = 1;
+        for(int i = 0 ; i < n_decrypt ; i++){
+            if ((ret = aead_decrypt(tls->traffic_protection.dec.aead, decryptbuf->base +
+                    decryptbuf->off, &decrypted_length, rec.fragment, rec.length))
+                != 0) {
+                if (tls->is_server && tls->server.early_data_skipped_bytes != UINT32_MAX)
+                    goto ServerSkipEarlyData;
+                return ret;
+            } else{
+                if(i != n_decrypt - 1){
+                    --(tls->traffic_protection.dec.aead->seq);
+                }
+            }   
         }
         rec.length = decrypted_length;
         rec.fragment = decryptbuf->base + decryptbuf->off;

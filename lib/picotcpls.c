@@ -1161,7 +1161,7 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
     if (!tcpls->failover_recovering && !did_we_sent_everything(tcpls, 0, ret))
       return -1;
   }
-  // /** queue the message in the sending buffer */
+  /** queue the message in the sending buffer */
   // if (stream_send_control_message(tcpls->tls, stream->streamid, stream->sendbuf, stream->aead_enc, input, type, 4)){
   //   printf("Error while closing stream %u", streamid);
   // }
@@ -1177,9 +1177,9 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
     stream->marked_for_close = 1;
     tcpls->streams_marked_for_close = 1;
   }
-  stream->stream_usable = 0;
+  //stream->stream_usable = 0;
   if (tcpls->buffer->bufkind == STREAMBASED) {
-    tcpls_stream_buffer_remove(tcpls->buffer, stream->streamid);
+    //tcpls_stream_buffer_remove(tcpls->buffer, stream->streamid);
   }
   return 0;
 }
@@ -1813,6 +1813,8 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
     tcpls->buffrag->off = 0;
   }
   restore_buf = con->buffrag->off;
+
+
   for (int i = 0; i < tcpls->streams->size && rret; i++) {
     tcpls_stream_t *stream = list_get(tcpls->streams, i);
     /* this is a stream attached to this connection */
@@ -1827,11 +1829,20 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
         decryptbuf = buf->decryptbuf;
       else
         decryptbuf = tcpls_get_stream_buffer(buf, stream->streamid);
+      if(!decryptbuf){
+        fprintf(stderr, "No decryptbuf for stream %u \n", stream->streamid);
+        continue;
+      }
       int decryptoff = decryptbuf->off;
       do {
         consumed = input_size - *input_off;
         rret = ptls_receive(tcpls->tls, decryptbuf, con->buffrag, input + *input_off, &consumed);
         *input_off += consumed;
+        // if(rret == 0){
+        //   printf("received on stream %u\n", stream->streamid);
+        // } else{
+        //   printf("failed on stream %u\n", stream->streamid);
+        // }
       } while (rret == 0 && *input_off < input_size);
       tcpls->tls->traffic_protection.dec.aead = remember_aead;
       /* Add this stream in the want-to-read list for the app */
@@ -2786,6 +2797,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
             ptls->traffic_protection.enc.aead, message, PONG_RTT,
                                   message_len);
+        
         /* send the pong message right away */
         if (do_send(ptls->tcpls,0, con) <= 0) {
           //XXX

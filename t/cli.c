@@ -494,7 +494,9 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
       for (int i = 0; i < streamlist->size; i++) {
         streamid = list_get(streamlist, i);
         decryptbuf = tcpls_get_stream_buffer(buf, *streamid);
-        init_sizes[i] = decryptbuf->off;
+        if(decryptbuf){
+          init_sizes[i] = decryptbuf->off;
+        }
       }
     }
     else {
@@ -596,10 +598,10 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
   uint8_t buf[block_size];
   tcpls_t *tcpls;
   struct conn_to_tcpls *conntotcpls;
-  for (int i = 0; i < conn_tcpls->size; i++) {
+  for (int i = conn_tcpls->size-1; i >= 0; i--) {
     conntotcpls = list_get(conn_tcpls, i);
     tcpls = conntotcpls->tcpls;
-    if (FD_ISSET(conntotcpls->conn_fd, writeset) && conntotcpls->wants_to_write && (scheduler == S_ROUNDROBIN || (scheduler == S_PRIMARYBACKUP && conntotcpls->is_primary))) {
+    if (FD_ISSET(conntotcpls->conn_fd, writeset) && conntotcpls->wants_to_write && scheduler == S_ROUNDROBIN) {
       int ret, ioret;
       if (*inputfd > 0)
         while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
@@ -697,7 +699,14 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
         conn->is_primary = 1;
         ret = 0;
       }
-      conn->recvbuf->decryptbuf->off = 0;
+      if(conn->recvbuf->bufkind == STREAMBASED){
+        ptls_buffer_t *buf = tcpls_get_stream_buffer(conn->recvbuf, conn->streamid);
+        if(buf){
+          buf->off = 0;
+        }
+      } else{
+        conn->recvbuf->decryptbuf->off = 0;
+      }
       if (ptls_handshake_is_complete(conn->tcpls->tls) && *inputfd > 0 &&
           (conn->is_primary || ((test == T_AGGREGATION  || test ==
                                  T_AGGREGATION_TIME) && conn->streamid))){
@@ -793,7 +802,12 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   struct timeval t_init, t_now;
   gettimeofday(&t_init, NULL);
   int ret;
-  tcpls_buffer_t *recvbuf = tcpls_aggr_buffer_new(tcpls);
+  tcpls_buffer_t *recvbuf;
+  //if(test == T_MULTIPLEXING){
+    //recvbuf = tcpls_stream_buffers_new(tcpls, max_streams);
+  //} else{
+    recvbuf = tcpls_aggr_buffer_new(tcpls);
+  //}
   FILE *mtest = fopen("Files/multipath_test.data", "w");
   assert(mtest);
   if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
@@ -856,7 +870,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         received_data += ret;
         if (received_data / 1000000 > mB_received) {
           mB_received++;
-          printf("Received %d MB\n",mB_received);
+          //printf("Received %d MB\n",mB_received);
         }
         if (outputfile && ret >= 0) {
           /** write infos on this received data */
@@ -893,8 +907,24 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
       }
     }
     /** consume received data */
-    fwrite(recvbuf->decryptbuf->base, recvbuf->decryptbuf->off, 1, mtest);
-    recvbuf->decryptbuf->off = 0;
+    //fwrite(recvbuf->decryptbuf->base, recvbuf->decryptbuf->off, 1, mtest);
+
+    if(recvbuf->bufkind == STREAMBASED){
+      ptls_buffer_t *buf; 
+      streamid_t *streamid;
+      for(int i = 0 ; i < data->streamlist->size ; i++){
+        streamid = list_get(data->streamlist, i);
+        buf = tcpls_get_stream_buffer(recvbuf, *streamid);
+        //printf("stream %u, buf %p\n", *streamid, buf);
+        if(buf){
+          buf->off = 0;
+        }
+      }
+
+    } else{
+      recvbuf->decryptbuf->off = 0;
+    }
+
     if (test == T_MULTIPATH && received_data >= 41457280  && !has_remigrated) {
       has_remigrated = 1;
       /*struct timeval timeout;*/
@@ -1000,6 +1030,8 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     }
     if(test == T_MULTIPLEXING && n_streams < max_streams) {
         streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*) &tcpls->v4_addr_llist->addr);
+        list_add(data->streamlist, &streamid);
+        ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, streamid); 
         struct timeval now;
         struct tm *tm;
         gettimeofday(&now, NULL);
@@ -1368,7 +1400,7 @@ Exit:
 static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
     *sa_peers, int nbr_ours, int nbr_peers, ptls_context_t *ctx, const char *input_file,
     ptls_handshake_properties_t *hsprop, int request_key_update, integration_test_t test,
-    scheduler_type_t scheduler, unsigned int failover_enabled)
+    scheduler_type_t scheduler, unsigned int failover_enabled, int max_stream)
 {
   int conn_fd, on = 1;
   int inputfd = 0;
@@ -1500,8 +1532,9 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
 
             if (test == T_SIMPLE_TRANSFER || test == T_MULTIPATH || test == T_AGGREGATION || test == T_AGGREGATION_TIME || test == T_MULTIPLEXING)
               conntcpls.recvbuf = tcpls_aggr_buffer_new(conntcpls.tcpls);
-            else
-              conntcpls.recvbuf = tcpls_stream_buffers_new(conntcpls.tcpls, 2);
+            else{
+              conntcpls.recvbuf = tcpls_stream_buffers_new(conntcpls.tcpls, max_stream);
+            }
 
             list_add(tcpls_l, new_tcpls);
             /** ADD our ips  -- This might worth to be ctx and instance-based?*/
@@ -2044,7 +2077,7 @@ int main(int argc, char **argv)
 
   if (is_server) {
     return run_server(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx,
-        input_file, &hsprop, request_key_update, test,scheduler, tcpls_options.failover_enabled);
+        input_file, &hsprop, request_key_update, test,scheduler, tcpls_options.failover_enabled, max_stream);
   } else {
     return run_client(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx,
         host, input_file, &hsprop, request_key_update, keep_sender_open, test, tcpls_options.failover_enabled, goodputfile, max_stream);

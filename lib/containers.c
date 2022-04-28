@@ -195,7 +195,7 @@ void list_free(list_t *list) {
 static int stream_buffer_cmp(const void *elem1, const void *elem2) {
   struct st_tcpls_stream_buffer *stream_buf1 = (struct st_tcpls_stream_buffer*) elem1;
   struct st_tcpls_stream_buffer *stream_buf2 = (struct st_tcpls_stream_buffer*) elem1;
-  int val = stream_buf1->streamid - stream_buf2->streamid;
+  streamid_t val = stream_buf1->streamid - stream_buf2->streamid;
   if (val < 0)
     return -1;
   else if (val == 0)
@@ -321,6 +321,15 @@ static struct st_tcpls_stream_buffer * pivot_search_stream_buffer(tcpls_buffer_t
     return pivot_search_stream_buffer(buffers, left, center, streamid);
 }
 
+static struct st_tcpls_stream_buffer * linear_search_stream_buffer(tcpls_buffer_t *buffers, streamid_t streamid) {
+  struct st_tcpls_stream_buffer *stream_buffer;
+  for(int i = 0 ; i < buffers->stream_buffers->size ; i++){
+    stream_buffer = list_get(buffers->stream_buffers, i);
+    if (stream_buffer->streamid == streamid)
+      return stream_buffer;
+  }
+  return NULL;
+}
 /**
  * Does a binary search of the streamid
  */
@@ -333,6 +342,11 @@ ptls_buffer_t *tcpls_get_stream_buffer(tcpls_buffer_t *buffers, streamid_t strea
     return stream_buffer->decryptbuf;
   }
   else {
+    stream_buffer = linear_search_stream_buffer(buffers, streamid);
+    if (stream_buffer) {
+      //printf("lol?\n");
+      return stream_buffer->decryptbuf;
+    }
     return NULL;
   }
 }
