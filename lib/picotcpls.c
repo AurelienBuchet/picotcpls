@@ -808,6 +808,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     }
     else {
       /** Cookie unvalid */
+      fprintf(stderr, "Cookie unvalid\n");
       return -1;
     }
   }
@@ -937,6 +938,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     ret = send(socket, tcpls->sendbuf->base, tcpls->sendbuf->off, 0);
     if (ret < 0) {
       /** TODO?  */
+      fprintf(stderr, "Send error in tcpls_accept\n");
       return -1;
     }
     /* check whether we sent everything */

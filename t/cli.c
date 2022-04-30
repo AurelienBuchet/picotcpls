@@ -808,8 +808,8 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   //} else{
     recvbuf = tcpls_aggr_buffer_new(tcpls);
   //}
-  FILE *mtest = fopen("Files/multipath_test.data", "w");
-  assert(mtest);
+  //FILE *mtest = fopen("Files/multipath_test.data", "w");
+  //assert(mtest);
   if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
     ret = -1;
     goto Exit;
@@ -1049,7 +1049,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   }
   ret = 0;
 Exit:
-  fclose(mtest);
+  //fclose(mtest);
   if (outputfile)
     fclose(outputfile);
   tcpls_buffer_free(tcpls, recvbuf);
@@ -1495,7 +1495,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
          * they want to write */
         for (int i = 0; i < conn_tcpls->size; i++) {
           conn = list_get(conn_tcpls, i);
-          if (conn->state == CONNECTED) {
+          if (conn->state >= CONNECTED) {
             FD_SET(conn->conn_fd , &readset);
             if (conn->wants_to_write)
               FD_SET(conn->conn_fd, &writeset);
