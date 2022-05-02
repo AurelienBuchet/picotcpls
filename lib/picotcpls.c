@@ -808,6 +808,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     }
     else {
       /** Cookie unvalid */
+      fprintf(stderr, "Cookie unvalid\n");
       return -1;
     }
   }
@@ -937,6 +938,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     ret = send(socket, tcpls->sendbuf->base, tcpls->sendbuf->off, 0);
     if (ret < 0) {
       /** TODO?  */
+      fprintf(stderr, "Send error in tcpls_accept\n");
       return -1;
     }
     /* check whether we sent everything */
@@ -1911,7 +1913,8 @@ static int do_send(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *con) 
     else {
       perror("send failed");
       connection_close(tcpls, con);
-    }
+    }  tcpls_limit_peer_con(tcpls, 0, 10000000);
+
   }
   return ret;
 }

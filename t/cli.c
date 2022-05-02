@@ -83,7 +83,9 @@ typedef enum integration_test_t {
   T_PERF,
   T_AGGREGATION,
   T_AGGREGATION_TIME, /* same as aggregation, but timing to add a stream is controled by a timer rather than a number of bytes */
-  T_MULTIPLEXING
+  T_MULTIPLEXING,
+  T_RTT,
+  T_NAT
 } integration_test_t;
 
 struct tcpls_options {
@@ -217,6 +219,7 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
     case STREAM_OPENED:
       fprintf(stderr, "Handling STREAM_OPENED callback\n");
       list_add(data->streamlist, &streamid);
+      tcpls_ping_nat(tcpls, transportid);
       break;
     case STREAM_NETWORK_FAILURE:
       fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback, removing stream %u\n", streamid);
@@ -837,7 +840,6 @@ static int handle_client_perf_test(tcpls_t *tcpls, struct cli_data *data) {
   }
   printf("Downloading!\n");
   fd_set readfds, writefds, exceptfds;
-
   while (1) {
     /*cleanup*/
     int *socket;
@@ -901,8 +903,8 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   //} else{
     recvbuf = tcpls_aggr_buffer_new(tcpls);
   //}
-  FILE *mtest = fopen("Files/multipath_test.data", "w");
-  assert(mtest);
+  //FILE *mtest = fopen("Files/multipath_test.data", "w");
+  //assert(mtest);
   if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
     ret = -1;
     goto Exit;
@@ -922,7 +924,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     outputfile = fopen(data->goodputfile, "a");
   }
 
-  gettimeofday(&(data->timer), NULL);
+  gettimeofday(&(data->timer), NULL);  
 
   //tcpls_limit_peer_con(tcpls, 0, 1000000);
   //tcpls_ping_tcp(tcpls, 0);
@@ -1142,7 +1144,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   }
   ret = 0;
 Exit:
-  fclose(mtest);
+  //fclose(mtest);
   if (outputfile)
     fclose(outputfile);
   tcpls_buffer_free(tcpls, recvbuf);
@@ -1185,6 +1187,10 @@ static int handle_client_zero_rtt_test(tcpls_t *tcpls, struct cli_data *data) {
   struct timeval rtt = timediff(&t_now, &t_init);
   printf("Handshake took %lu µs\n", rtt.tv_sec*1000000+rtt.tv_usec);
   return ret;
+}
+
+static int handle_client_ping_test(tcpls_t *tcpls,integration_test_t test, struct cli_data *data){
+
 }
 
 static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
@@ -1246,6 +1252,21 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
         ret = handle_client_perf_test(tcpls, data);
         break;
       }
+    case T_RTT:
+    case T_NAT:
+    {
+        struct timeval timeout;
+        timeout.tv_sec = 5;
+        timeout.tv_usec = 0;
+
+        int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
+        if (err){
+          fprintf(stderr, "tcpls_connect failed with err %d\n", err);
+          return 1;
+        }
+        ret = handle_client_ping_test(tcpls, test, data);
+        break;
+    }
     case T_NOTEST:
       printf("NO TEST");
       exit(1);
@@ -1569,7 +1590,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
          * they want to write */
         for (int i = 0; i < conn_tcpls->size; i++) {
           conn = list_get(conn_tcpls, i);
-          if (conn->state == CONNECTED) {
+          if (conn->state >= CONNECTED) {
             FD_SET(conn->conn_fd , &readset);
             if (conn->wants_to_write)
               FD_SET(conn->conn_fd, &writeset);
@@ -1580,10 +1601,12 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         /*fprintf(stderr, "waiting for connection or r/w event...\n");*/
       } while (select(maxfd+1, &readset, &writeset, NULL, &timeout) == -1);
       /** Check first we have a listen() connection */
+
       for (int i = 0; i < nbr_ours; i++) {
         if (FD_ISSET(listenfd[i], &readset)) {
           struct sockaddr_storage ss;
           socklen_t slen = sizeof(ss);
+          printf("helo\n");
           int new_conn = accept(listenfd[i], (struct sockaddr *)&ss, &slen);
           if (new_conn < 0) {
             perror("accept");
