@@ -472,7 +472,7 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
                 else {
                     fprintf(stderr, "Accepting a new connection\n");
                     tcpls_t *new_tcpls = tcpls_new(ctx,  1);
-                    new_tcpls->enable_failover = 0;
+                    new_tcpls->enable_multipath = 1;
                     tcpls_conn_t conntcpls;
                     memset(&conntcpls, 0, sizeof(conntcpls));
                     conntcpls.socket = new_conn;
