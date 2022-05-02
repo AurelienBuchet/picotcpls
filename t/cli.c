@@ -128,6 +128,8 @@ struct cli_data {
 
 static struct tcpls_options tcpls_options;
 
+int data_sent = 0;
+
 
 static void sig_handler(int signo) {
   if (signo == SIGPIPE) {
@@ -391,7 +393,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
   return 0;
 }
 
-static int handle_ping_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval tv, int transportid){
+static int handle_rtt_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval tv, int transportid){
   struct timeval now;
   struct tm *tm;
   gettimeofday(&now, NULL);
@@ -401,16 +403,107 @@ static int handle_ping_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval
   strcat(timebuf, ".");
   sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
   strcat(timebuf, usecbuf);
-  fprintf(stderr, "%s ping event %d\n", timebuf, event);
+  fprintf(stderr, "%s RTT event %d\n", timebuf, event);
   switch (event) {
     case PING_RTT_RECEIVED:
       {
+        fprintf(stderr, "RTT request received, sending reply");
         break;
       }
     case PONG_RTT_RECEIVED:
     {
       struct timeval td = timediff(&now, &tv);
-      printf("Estimated RTT : %0.8f sec\n",td.tv_sec + 1e-6*td.tv_usec);
+      fprintf(stderr, "RTT replied received, estimated RTT : %0.8f sec\n",td.tv_sec + 1e-6*td.tv_usec);
+      break;
+    }
+    default:
+      break;
+  }
+  return 0;
+}
+
+static int handle_nat_event(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr *addr, int transportid){
+  struct timeval now;
+  struct tm *tm;
+  gettimeofday(&now, NULL);
+  tm = localtime(&now.tv_sec);
+  char timebuf[32], usecbuf[7];
+  strftime(timebuf, 32, "%H:%M:%S", tm);
+  strcat(timebuf, ".");
+  sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+  strcat(timebuf, usecbuf);
+  fprintf(stderr, "%s NAT event %d\n", timebuf, event);
+  switch (event) {
+    case PING_NAT_RECEIVED:
+      {
+        fprintf(stderr, "NAT request received, sending reply");
+        break;
+      }
+    case PONG_NAT_RECEIVED:
+    {
+      fprintf(stderr, "NAT replied received ");
+      connect_info_t *con = connection_get(tcpls, transportid);
+      if (!con){
+        fprintf(stderr, "Failed to retreived connection\n");
+        return -1;
+      }
+
+      if(addr->sa_family == AF_INET){
+          struct sockaddr_in con_sa;
+          struct sockaddr_in con_rcv = *(struct sockaddr_in*) addr;
+          socklen_t sa_len = sizeof(con_sa);
+          if(getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len)){
+            fprintf(stderr, "Failed to get socket name\n");
+            return -1;
+          }
+          struct in_addr myIP = con_sa.sin_addr;
+          unsigned int myPort = ntohs(con_sa.sin_port);
+          in_port_t myPortPeer = ntohs(con_rcv.sin_port);
+          struct in_addr myIPPeer = con_rcv.sin_addr;
+
+          char myIPString[16];
+          inet_ntop(AF_INET, &(myIP), myIPString, sizeof(myIPString));
+          char myIPPeerString[16];
+          inet_ntop(AF_INET, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
+
+          if(strcmp(myIPString, myIPPeerString) || myPort != myPortPeer ){
+            fprintf(stderr,"NAT detected : \n");
+
+            fprintf(stderr,"Local ip address: %s\n", myIPString);
+            fprintf(stderr,"Local port : %u\n", myPort);
+            fprintf(stderr,"Peer ip address: %s\n", myIPPeerString);
+            fprintf(stderr,"Peer port : %u\n", myPortPeer);
+          } else{
+            fprintf(stderr,"Local address and port match received ones\n");
+          }
+      } else {
+        struct sockaddr_in6 con_sa;
+        struct sockaddr_in6 con_rcv = *(struct sockaddr_in6 *) addr;
+        socklen_t sa_len = sizeof(con_sa);
+        if(getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len)){
+          fprintf(stderr, "Failed to get socket name\n");
+        }          
+        struct in6_addr myIP = con_sa.sin6_addr;
+        unsigned int myPort = ntohs(con_sa.sin6_port);
+        in_port_t myPortPeer =  ntohs(con_rcv.sin6_port);
+        struct in6_addr myIPPeer = con_rcv.sin6_addr;
+        char myIPString[40];
+        inet_ntop(AF_INET6, &(myIP), myIPString, sizeof(myIPString));
+        char myIPPeerString[40];
+        inet_ntop(AF_INET6, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
+        if(strcmp(myIPString, myIPPeerString) || myPort != myPortPeer){
+          printf("NAT detected : \n");
+          
+          myPort = ntohs(myPort);
+          printf("Local ip address: %s\n", myIPString);
+          printf("Local port : %u\n", myPort);
+
+          printf("Peer ip address: %s\n", myIPPeerString);
+          printf("Peer port : %u\n", myPortPeer);
+        } else{
+          fprintf(stderr,"Local address and port match received ones\n");
+        }
+      }
       break;
     }
     default:
@@ -590,11 +683,12 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
   return 1;
 }
 
-static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *writeset, scheduler_type_t scheduler){
+static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *writeset, scheduler_type_t scheduler, int data_thresh){
   static const size_t block_size = PTLS_MAX_ENCRYPTED_RECORD_SIZE;
   uint8_t buf[block_size];
   tcpls_t *tcpls;
   struct conn_to_tcpls *conntotcpls;
+  //for (int i = 0; i < conn_tcpls->size && i < 2; i++) {
   for (int i = conn_tcpls->size-1; i >= 0; i--) {
     conntotcpls = list_get(conn_tcpls, i);
     tcpls = conntotcpls->tcpls;
@@ -611,13 +705,14 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
         if(ret != 0) {
           fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
               ret, conntotcpls->streamid);
-          /*close(inputfd);*/
-          /*inputfd = -1;*/
+          close(inputfd);
+          inputfd = -1;
           return -1;
         }
         if (ret == TCPLS_HOLD_DATA_TO_SEND) {
           fprintf(stderr, "sending %d bytes on stream %u; not everything has been sent \n", ioret, conntotcpls->streamid);
         }
+        data_sent += ioret;
       } else if (ioret == 0) {
         /* closed */
         fprintf(stderr, "End-of-file, closing the connection linked to stream id\
@@ -683,7 +778,7 @@ static int handle_server_perf_test(struct conn_to_tcpls *conn, fd_set
 }
 
 static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t test,scheduler_type_t scheduler ,int *inputfd, fd_set
-    *readset, fd_set *writeset) {
+    *readset, fd_set *writeset, int max_stream) {
   /** Now Read data for all tcpls_t * that wants to read */
   int ret = 1;
 
@@ -713,7 +808,7 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
     }
   }
   if(test == T_MULTIPLEXING){
-    ret = handle_tcpls_multi_write(conn_tcpls, inputfd, writeset, scheduler);
+    ret = handle_tcpls_multi_write(conn_tcpls, inputfd, writeset, scheduler, 1093741824/max_stream);
   } else {
     /** Write data for all tcpls_t * that wants to write :-) */
     for (int i = 0; i < conn_tcpls->size; i++) {
@@ -1389,7 +1484,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   ctx->connection_event_cb = &handle_connection_event;
   ctx->stream_event_cb = &handle_stream_event;
   ctx->address_event_cb = &handle_address_event;
-  ctx->rtt_event_cb = &handle_ping_event;
+  ctx->rtt_event_cb = &handle_rtt_event;
   ctx->cb_data = conn_tcpls;
   socklen_t salen;
   struct timeval timeout;
@@ -1507,7 +1602,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             if (test == T_MULTIPATH || new_tcpls->enable_failover || test == T_AGGREGATION || test == T_AGGREGATION_TIME || test == T_MULTIPLEXING)
               conntcpls.tcpls->enable_multipath = 1;
 
-            if (test == T_SIMPLE_TRANSFER || test == T_MULTIPATH || test == T_AGGREGATION || test == T_AGGREGATION_TIME || test == T_MULTIPLEXING)
+            if (test == T_SIMPLE_TRANSFER || test == T_MULTIPATH || test == T_AGGREGATION || test == T_AGGREGATION_TIME)// || test == T_MULTIPLEXING)
               conntcpls.recvbuf = tcpls_aggr_buffer_new(conntcpls.tcpls);
             else{
               conntcpls.recvbuf = tcpls_stream_buffers_new(conntcpls.tcpls, max_stream);
@@ -1534,7 +1629,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             fprintf(stderr, "failed to open file:%s:%s\n", input_file, strerror(errno));
             goto Exit;
           }
-          if ((ret = handle_server_multipath_test(conn_tcpls, test, scheduler, &inputfd,  &readset, &writeset)) < -1) {
+          if ((ret = handle_server_multipath_test(conn_tcpls, test, scheduler, &inputfd,  &readset, &writeset, max_stream)) < -1) {
             goto Exit;
           }
           break;
@@ -1602,7 +1697,8 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   ctx->cb_data = &data;
   ctx->stream_event_cb = &handle_client_stream_event;
   ctx->connection_event_cb = &handle_client_connection_event;
-  ctx->rtt_event_cb = &handle_ping_event;
+  ctx->rtt_event_cb = &handle_rtt_event;
+  ctx->nat_event_cb = &handle_nat_event;
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   ctx->output_decrypted_tcpls_data = 0;

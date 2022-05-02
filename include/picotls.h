@@ -885,7 +885,7 @@ typedef struct st_ptls_log_event_t {
     /**
      * A callback used when a nat event occurs
      */
-    int (*nat_event_cb)(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr *, int transportid);
+    int (*nat_event_cb)(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr *addr, int transportid);
     /**
      * A callback used when a tcpinfo event occurs
      */

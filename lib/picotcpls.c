@@ -2904,63 +2904,26 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         sa_family_t family = *(sa_family_t*) &input[offset];
         offset += sizeof(sa_family_t); 
         if (family == AF_INET){
-          struct sockaddr_in con_sa;
-          socklen_t sa_len = sizeof(con_sa);
-          if(getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len)){
-            fprintf(stderr, "Failed to get socket name");
-          }
+          struct sockaddr_in con_rcv;
+          con_rcv.sin_family = AF_INET;
+          con_rcv.sin_port = *(in_port_t*) &input[offset];
+          con_rcv.sin_addr = *(struct in_addr*)&input[offset];
+
           if(ptls->ctx->nat_event_cb){
-            ptls->ctx->nat_event_cb(ptls->tcpls, PING_NAT_RECEIVED, (struct sockaddr *)&con_sa, con->this_transportid);
+            ptls->ctx->nat_event_cb(ptls->tcpls, PONG_NAT_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
           } 
-          struct in_addr myIP = con_sa.sin_addr;
-          unsigned int myPort = ntohs(con_sa.sin_port);
-          in_port_t myPortPeer = *(in_port_t*) &input[offset];
-          myPortPeer = ntohs(myPortPeer);
-          offset += sizeof(in_port_t);
-          struct in_addr myIPPeer = *(struct in_addr*)&input[offset];
-
-          char myIPString[16];
-          inet_ntop(AF_INET, &(myIP), myIPString, sizeof(myIPString));
-          char myIPPeerString[16];
-          inet_ntop(AF_INET, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
-
-          if(strcmp(myIPString, myIPPeerString) || myPort != myPortPeer ){
-            printf("NAT detected : \n");
-
-            printf("Local ip address: %s\n", myIPString);
-            printf("Local port : %u\n", myPort);
-            printf("Peer ip address: %s\n", myIPPeerString);
-            printf("Peer port : %u\n", myPortPeer);
-          }
         } else {
-          struct sockaddr_in6 con_sa;
-          socklen_t sa_len = sizeof(con_sa);
-          if(getsockname(con->socket, (struct sockaddr *) &con_sa, &sa_len)){
-            printf("Failed to get socket name");
-          }          
-          struct in6_addr myIP = con_sa.sin6_addr;
-          unsigned int myPort = ntohs(con_sa.sin6_port);
-          in_port_t myPortPeer = *(in_port_t*) &input[offset];
-          myPortPeer = ntohs(myPortPeer);
-          offset += sizeof(in_port_t);
 
-          struct in6_addr myIPPeer = *(struct in6_addr*)&input[offset];
-          char myIPString[40];
-          inet_ntop(AF_INET6, &(myIP), myIPString, sizeof(myIPString));
-          char myIPPeerString[40];
-          inet_ntop(AF_INET6, &(myIPPeer), myIPPeerString, sizeof(myIPPeerString));
-          if(strcmp(myIPString, myIPPeerString) || myPort != myPortPeer){
-            printf("NAT detected : \n");
-            
-            myPort = ntohs(myPort);
-            printf("Local ip address: %s\n", myIPString);
-            printf("Local port : %u\n", myPort);
+          struct sockaddr_in6 con_rcv;
+          con_rcv.sin6_family = AF_INET6;
+          con_rcv.sin6_port = *(in_port_t*) &input[offset];
+          con_rcv.sin6_addr = *(struct in6_addr*)&input[offset];
 
-            printf("Peer ip address: %s\n", myIPPeerString);
-            printf("Peer port : %u\n", myPortPeer);
-          }
+          if(ptls->ctx->nat_event_cb){
+            ptls->ctx->nat_event_cb(ptls->tcpls, PONG_NAT_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
+          } 
         }
-        break;
+      break;
     }
     case PING_TCP:
     {
