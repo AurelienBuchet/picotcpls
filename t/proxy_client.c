@@ -292,8 +292,9 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
   return ret;
 }
 
-static int start_tunnel(tcpls, data){
+static int start_tunnel(tcpls_t *tcpls,internal_data_t *data){
     
+    return 0;
 }
 
 static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,const char *input_file){

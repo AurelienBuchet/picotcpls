@@ -1172,6 +1172,66 @@ static int handle_client_simple_handshake(tcpls_t *tcpls, struct cli_data *data)
   return ret;
 }
 
+static int handle_client_nat_test(tcpls_t *tcpls, struct cli_data *data) {
+  int ret;
+  struct timeval timeout;
+  timeout.tv_sec = 5;
+  timeout.tv_usec = 0;
+  struct timeval t_init, t_now;
+  gettimeofday(&t_init, NULL);
+  int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
+  if (err){
+    fprintf(stderr, "tcpls_connect failed with err %d\n", err);
+    return 1;
+  }
+  tcpls_buffer_t *recvbuf = tcpls_stream_buffers_new(tcpls, 1);
+  if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
+    ret = -1;
+  }
+  tcpls_ping_nat(tcpls, 0);
+  fprintf(stderr, "Handshake done checking for nat\n");
+
+  int maxfds = 0;
+  fd_set readfds, writefds, exceptfds;
+  while (1) {
+    int *socket;
+    do {
+      FD_ZERO(&readfds);
+      FD_ZERO(&writefds);
+      FD_ZERO(&exceptfds);
+      for (int i = 0; i < data->socklist->size; i++) {
+        socket = list_get(data->socklist, i);
+        FD_SET(*socket, &readfds);
+        if (maxfds <= *socket)
+          maxfds = *socket;
+      }
+    } while (select(maxfds+1, &readfds, &writefds, &exceptfds, NULL) == -1);
+
+    int ret;
+    for (int i = 0; i < data->socklist->size; i++) {
+      socket = list_get(data->socklist, i);
+      if (FD_ISSET(*socket, &readfds)) {
+        if ((ret = handle_tcpls_read(tcpls, *socket, recvbuf, data->streamlist, NULL)) < 0) {
+          fprintf(stderr, "handle_tcpls_read returned %d\n",ret);
+          break;
+        }
+      }
+      ptls_buffer_t *buf;
+      streamid_t *streamid;
+      for (int i = 0; i < recvbuf->wtr_streams->size; i++) {
+        streamid = list_get(recvbuf->wtr_streams, i);
+        buf = tcpls_get_stream_buffer(recvbuf, *streamid);
+        buf->off = 0;// blackhole the received data
+      }
+    }
+  }
+
+
+  sleep(2);
+
+  return ret;
+}
+
 static int handle_client_zero_rtt_test(tcpls_t *tcpls, struct cli_data *data) {
   int ret;
   ptls_handshake_properties_t prop = {NULL};
@@ -1210,6 +1270,13 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
         printf("TEST 0-RTT: SUCCESS\n");
       else
         printf("TEST 0-RTT: FAILURE\n");
+      break;
+    case T_NAT:
+      ret = handle_client_nat_test(tcpls, data);
+      if(!ret)
+        printf("TEST NAT: SUCCESS\n");
+      else
+        printf("TEST NAT: FAILURE\n");
       break;
     case T_MULTIPLEXING:
     case T_SIMPLE_TRANSFER:
@@ -1252,21 +1319,6 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
         ret = handle_client_perf_test(tcpls, data);
         break;
       }
-    case T_RTT:
-    case T_NAT:
-    {
-        struct timeval timeout;
-        timeout.tv_sec = 5;
-        timeout.tv_usec = 0;
-
-        int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
-        if (err){
-          fprintf(stderr, "tcpls_connect failed with err %d\n", err);
-          return 1;
-        }
-        ret = handle_client_ping_test(tcpls, test, data);
-        break;
-    }
     case T_NOTEST:
       printf("NO TEST");
       exit(1);
@@ -1606,7 +1658,6 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         if (FD_ISSET(listenfd[i], &readset)) {
           struct sockaddr_storage ss;
           socklen_t slen = sizeof(ss);
-          printf("helo\n");
           int new_conn = accept(listenfd[i], (struct sockaddr *)&ss, &slen);
           if (new_conn < 0) {
             perror("accept");
@@ -1980,6 +2031,8 @@ int main(int argc, char **argv)
                   test = T_AGGREGATION_TIME;
                 else if (strcasecmp(optarg, "multiplexing") == 0)
                   test = T_MULTIPLEXING;
+                else if (strcasecmp(optarg, "nat") == 0)
+                  test = T_NAT;
                 else {
                   fprintf(stderr, "Unknown integration test: %s\n", optarg);
                   exit(1);
