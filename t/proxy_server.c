@@ -108,6 +108,55 @@ static void tcpls_add_ips(tcpls_t *tcpls, struct sockaddr_storage *sa_our,
   }
 }
 
+static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
+    streamid_t streamid, int transportid, void *cbdata) {
+  internal_data_t *data = (internal_data_t *) cbdata;
+  list_t *conn_tcpls_l = data->tcpls_conns;
+  tcpls_conn_t *conn_tcpls;
+  
+  struct timeval now;
+  struct tm *tm;
+  gettimeofday(&now, NULL);
+  tm = localtime(&now.tv_sec);
+  char timebuf[32], usecbuf[7];
+  strftime(timebuf, 32, "%H:%M:%S", tm);
+  strcat(timebuf, ".");
+  sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+  strcat(timebuf, usecbuf);
+  fprintf(stderr, "%s Stream event %d\n", timebuf, event);
+  switch (event) {
+    case STREAM_OPENED:
+    case STREAM_NETWORK_RECOVERED:
+      if (event == STREAM_OPENED)
+        fprintf(stderr, "Handling STREAM_OPENED callback\n");
+      else
+        fprintf(stderr, "Handling STREAM_NETWORK_RECOVERED callback\n");
+      for (int i = 0; i < conn_tcpls_l->size; i++) {
+        conn_tcpls = list_get(conn_tcpls_l, i);
+        if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
+          conn_tcpls->streamid = streamid;
+          break;
+        }
+      }
+      break;
+      /** currently assumes 2 streams */
+    case STREAM_CLOSED:
+    case STREAM_NETWORK_FAILURE:
+      if (event == STREAM_CLOSED)
+        fprintf(stderr, "Handling STREAM_CLOSED callback\n");
+      else
+        fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback\n");
+      for (int i = 0; i < conn_tcpls_l->size; i++) {
+        conn_tcpls = list_get(conn_tcpls_l, i);
+        if (tcpls == conn_tcpls->tcpls && conn_tcpls->transportid == transportid && conn_tcpls->streamid == streamid) {
+          fprintf(stderr, "Woh! we're stopping to write on the connection linked to transportid %d streamid %u\n", transportid, streamid);
+        }
+      }
+    default: break;
+  }
+  return 0;
+}
+
 static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     socket, int transportid, void *cbdata) {
   internal_data_t *data = (internal_data_t *) cbdata;
@@ -272,15 +321,18 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
 
 static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t *message, size_t message_len){
     if(message_len < 20){
-
+      fprintf(stderr, "Message is too short length\n");
+      return -1;
     }
     tunnel_message_type type = message[0];
     if(type != TCP_CONNECT){
-
+      fprintf(stderr, "Message isn't a TCP Connect\n");
+      return -1;
     }
     uint8_t tlv_len = message[1];
     if(tlv_len != 18){
-
+      fprintf(stderr, "Invalid message length\n");
+      return -1;
     }
     in_port_t port = *(in_port_t *) &message[2];
     struct in6_addr addr = *(struct in6_addr *) &message[4];
@@ -302,6 +354,22 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
     tcp_new.socket = sock;
     tcp_new.tcpls_conn = conn;
     list_add(data->tcp_conns, &tcp_new);
+
+    uint8_t ok_message[4];
+    ok_message[0] = TCP_CONNECT_OK;
+    ok_message[1] = 0;
+    ok_message[2] = END;
+    ok_message[3] = 0;
+    int ret;
+    while((ret = tcpls_send(conn->tcpls->tls, conn->streamid, ok_message, 4)) == TCPLS_CON_LIMIT_REACHED){
+
+    }
+    if(ret != 0) {
+      fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
+          ret, conn->streamid);
+      return -1;
+    } 
+
     conn->state = PROXY_OPENED;
     return 0;
 }
@@ -347,12 +415,27 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
             ret = handle_tcpls_read(conn->tcpls, conn->socket, conn->recvbuf, NULL, data->tcpls_conns);
             if(ret == -2){
                 fprintf(stderr, "Primary connection connected\n");
-                ret = 0;
+                /*streamid_t streamid = tcpls_stream_new(conn->tcpls->tls, NULL, (struct sockaddr*) &conn->tcpls->v6_addr_llist->addr);
+                fprintf(stderr, "Sending a STREAM_ATTACH on the new path\n");
+                if (tcpls_streams_attach(conn->tcpls->tls, 0, 1) < 0)
+                  fprintf(stderr, "Failed to attach stream %u\n", streamid);*/
+                return 0;
+            } else if(ret) {
+              fprintf(stderr, "Read failed %d\n", ret);
             }
             if(ptls_handshake_is_complete(conn->tcpls->tls)){
+              if(!conn->streamid){
+                ret = tcpls_send(conn->tcpls->tls, 0, NULL, 0);
+                if(ret < 0){
+                  fprintf(stderr, "tcpls_send failed %d\n", ret);
+                }
+                fprintf(stderr, "Brute force stream creation\n");
+              }
+
                 ptls_buffer_t *buf = tcpls_get_stream_buffer(conn->recvbuf, conn->streamid);
                 if(conn->state == PROXY_WAITING_TCP_CONNECT){
                     if(buf){
+                        fprintf(stderr, "Handling a TCP Connect\n");
                         ret = handle_tcp_connect(data, conn,buf->base, buf->off);
                         buf->off = 0;
                     }
@@ -371,7 +454,7 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
             ret = handle_tcp_read(data, conn_tcp);
         }
     }
-    fprintf(stderr, "proxy returned %d\n", ret);
+
     return ret;
 }
 
@@ -383,6 +466,7 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
 
     //TODO Callbacks
     ctx->connection_event_cb = &handle_connection_event;
+    ctx->stream_event_cb = &handle_stream_event;
 
     ctx->cb_data = data;
 
@@ -489,7 +573,7 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
         }
         //Handle data 
         if(handle_proxy_server(data, &readset, &writeset) < 0){
-            goto Exit;
+            //goto Exit;
         }
     }
 
