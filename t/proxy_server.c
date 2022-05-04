@@ -128,15 +128,16 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
     case STREAM_OPENED:
     case STREAM_NETWORK_RECOVERED:
       if (event == STREAM_OPENED)
-        fprintf(stderr, "Handling STREAM_OPENED callback\n");
+        fprintf(stderr, "Handling STREAM_OPENED callback %d \n", transportid);
       else
         fprintf(stderr, "Handling STREAM_NETWORK_RECOVERED callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
           conn_tcpls->streamid = streamid;
+          fprintf(stderr, "Stream id of connection %d is now %u\n", transportid, streamid);
           break;
-        }
+        } 
       }
       break;
       /** currently assumes 2 streams */
@@ -348,12 +349,15 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
 
     if(connect(sock, (struct sockaddr *) &peer_addr, sizeof(struct sockaddr_in6)) != 0){
         fprintf(stderr, "Fail to establish TCP tunnel to %s\n", addr_str);
+
+        return -1;
     }
     fprintf(stderr, "Established TCP tunnel to %s\n", addr_str);
     tcp_conn_t tcp_new;
     tcp_new.socket = sock;
     tcp_new.tcpls_conn = conn;
     list_add(data->tcp_conns, &tcp_new);
+    conn->tcp = &tcp_new;
 
     uint8_t ok_message[4];
     ok_message[0] = TCP_CONNECT_OK;
@@ -375,6 +379,7 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
 }
 
 static int handle_tcp_forward(internal_data_t *data, tcp_conn_t *conn_tcp, uint8_t *message, size_t message_len){
+    fprintf(stderr, "forwarding from TCP %ld bytes of data : %s", message_len, message);
     int ret = write(conn_tcp->socket, message, message_len);
     if(ret < 0){
         fprintf(stderr, "failed to forward message\n");
@@ -392,6 +397,7 @@ static int handle_tcp_read(internal_data_t *data, tcp_conn_t *conn_tcp){
         perror("read");
         return -1;
     }
+    fprintf(stderr, "forwarding from TCPLS %d bytes of data : %s", to_send, buf);
     int ret;
     tcpls_conn_t *tcpls_conn = conn_tcp->tcpls_conn;
     while ((ret = tcpls_send(tcpls_conn->tcpls->tls, tcpls_conn->streamid, buf, to_send)) == TCPLS_CON_LIMIT_REACHED){
@@ -420,12 +426,12 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
                 if (tcpls_streams_attach(conn->tcpls->tls, 0, 1) < 0)
                   fprintf(stderr, "Failed to attach stream %u\n", streamid);*/
                 return 0;
-            } else if(ret) {
+            } else if(ret < 0) {
               fprintf(stderr, "Read failed %d\n", ret);
             }
             if(ptls_handshake_is_complete(conn->tcpls->tls)){
-              if(!conn->streamid){
-                ret = tcpls_send(conn->tcpls->tls, 0, NULL, 0);
+              if(!conn->streamid){ 
+                ret = tcpls_send(conn->tcpls->tls, 0, "hello", 6);
                 if(ret < 0){
                   fprintf(stderr, "tcpls_send failed %d\n", ret);
                 }
@@ -433,6 +439,9 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
               }
 
                 ptls_buffer_t *buf = tcpls_get_stream_buffer(conn->recvbuf, conn->streamid);
+                if(!buf){
+                  fprintf(stderr, "Failed to find buffer\n");
+                }
                 if(conn->state == PROXY_WAITING_TCP_CONNECT){
                     if(buf){
                         fprintf(stderr, "Handling a TCP Connect\n");

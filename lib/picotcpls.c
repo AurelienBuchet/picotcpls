@@ -1258,7 +1258,6 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
     stream_send_control_message(tcpls->tls, 0, stream->sendbuf,
         tls->traffic_protection.enc.aead, message, STREAM_ATTACH, message_len);
     fprintf(stderr, "Sending stream attach as no stream exist\n");
-    ret = do_send(tcpls, stream, con);
     /** To check whether we sent it and if the stream becomes usable */
     stream->send_stream_attach_in_sendbuf_pos = stream->sendbuf->off;
     tcpls->check_stream_attach_sent = 1;
@@ -1381,9 +1380,6 @@ int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvre
       } while (rret == 0 && input_off < input_size);
       /** We may have received a stream attach that changed the aead*/
       tcpls->tls->traffic_protection.dec.aead = remember_aead;
-      if(rret){
-        fprintf(stderr, "Failed to receive stream_attach %d\n", rret);
-      }
     }
     if (input_off < input_size) {
       int progress = 1;

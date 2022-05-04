@@ -219,7 +219,6 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
     case STREAM_OPENED:
       fprintf(stderr, "Handling STREAM_OPENED callback\n");
       list_add(data->streamlist, &streamid);
-      tcpls_ping_nat(tcpls, transportid);
       break;
     case STREAM_NETWORK_FAILURE:
       fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback, removing stream %u\n", streamid);
