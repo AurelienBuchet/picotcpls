@@ -7,18 +7,41 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <getopt.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 
 int main(int argc, char **argv){
-    int listen_sock, len, sock;
-    if(argc < 2){
+    int listen_sock, len, sock, ch, io_fd = 0;
+    char *input_file = NULL;
+
+    while((ch = getopt(argc, argv, "f:")) != -1){
+        switch (ch){
+        case 'f':{
+            input_file = optarg;
+            break;
+        }
+     }
+    }
+    argc -= optind;
+    argv += optind;
+    if(argc < 1){
         printf("Usage : port\n");
         return -1;
     }
-    in_port_t port = atoi(argv[1]);
+    in_port_t port = atoi((--argc, *argv++));
     listen_sock = socket(AF_INET6, SOCK_STREAM, 0);
     if(listen_sock < 0){
         perror("socket");
         return -1;
+    }
+
+    if(input_file){
+        io_fd = open(input_file, O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
+        if(io_fd < 0){
+            perror("open");
+        }
     }
 
 
@@ -58,14 +81,17 @@ int main(int argc, char **argv){
     struct timeval timeout;
     memset(&timeout, 0, sizeof(struct timeval));
     timeout.tv_sec = 100;
-
+    static const size_t block_size = 16384 + 256;
+    uint8_t buf[block_size];
     while (1){
         FD_ZERO(&readset);
         FD_ZERO(&writeset);
         FD_SET(sock , &readset);
         select(maxfd+1, &readset, &writeset, NULL, &timeout);
+        if(FD_ISSET(sock, &readset)){
+            int n_rec = read(sock, buf, block_size );
+            write(io_fd, buf, n_rec);
+            n_rec = write(sock, "ack", 4);
+        }
     }
-    
-
-
 }

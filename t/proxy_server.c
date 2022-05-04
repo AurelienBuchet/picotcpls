@@ -171,7 +171,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
   strcat(timebuf, ".");
   sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
   strcat(timebuf, usecbuf);
-  fprintf(stderr, "%s Connection event %d\n", timebuf, event);
+  //fprintf(stderr, "%s Connection event %d\n", timebuf, event);
   switch (event) {
     case CONN_FAILED:
       {
@@ -181,6 +181,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
           ctcpls = list_get(conntcpls, i);
           if (ctcpls->tcpls == tcpls && ctcpls->socket == socket && ctcpls->transportid == transportid) {
             ctcpls->state = PROXY_CLOSED;
+            list_remove(conntcpls, ctcpls);
             break;
           }
         }
@@ -202,13 +203,15 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       break;
     case CONN_CLOSED:
       {
-        fprintf(stderr, "Received a CONN_CLOSED; removing the connection linked to  socket %d\n", socket);
+        //fprintf(stderr, "Received a CONN_CLOSED; removing the connection linked to socket %d\n", socket);
         tcpls_conn_t *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
           if (ctcpls->tcpls == tcpls && ctcpls->socket == socket && ctcpls->transportid == transportid) {
             ctcpls->socket = 0;
             ctcpls->state = PROXY_CLOSED;
+            printf("Closed connection %d \n", transportid);
+            list_remove(conntcpls, ctcpls);
           }
         }
       }
@@ -352,13 +355,12 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
 
         return -1;
     }
-    fprintf(stderr, "Established TCP tunnel to %s\n", addr_str);
-    tcp_conn_t tcp_new;
-    tcp_new.socket = sock;
-    tcp_new.tcpls_conn = conn;
-    list_add(data->tcp_conns, &tcp_new);
-    conn->tcp = &tcp_new;
-
+    fprintf(stderr, "Established TCP tunnel to %s on socket %d\n", addr_str, sock);
+    tcp_conn_t *tcp_new = malloc(sizeof(tcp_conn_t));
+    tcp_new->socket = sock;
+    tcp_new->tcpls_conn = conn;
+    list_add(data->tcp_conns, tcp_new);
+    conn->tcp = tcp_new;
     uint8_t ok_message[4];
     ok_message[0] = TCP_CONNECT_OK;
     ok_message[1] = 0;
@@ -379,7 +381,8 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
 }
 
 static int handle_tcp_forward(internal_data_t *data, tcp_conn_t *conn_tcp, uint8_t *message, size_t message_len){
-    fprintf(stderr, "forwarding from TCP %ld bytes of data : %s", message_len, message);
+    fprintf(stderr, "forwarding from TCPLS %ld bytes of data\n", message_len);
+
     int ret = write(conn_tcp->socket, message, message_len);
     if(ret < 0){
         fprintf(stderr, "failed to forward message\n");
@@ -397,7 +400,7 @@ static int handle_tcp_read(internal_data_t *data, tcp_conn_t *conn_tcp){
         perror("read");
         return -1;
     }
-    fprintf(stderr, "forwarding from TCPLS %d bytes of data : %s", to_send, buf);
+    fprintf(stderr, "forwarding from TCP %d bytes of data\n", to_send);
     int ret;
     tcpls_conn_t *tcpls_conn = conn_tcp->tcpls_conn;
     while ((ret = tcpls_send(tcpls_conn->tcpls->tls, tcpls_conn->streamid, buf, to_send)) == TCPLS_CON_LIMIT_REACHED){
@@ -417,6 +420,11 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
     tcpls_conn_t *conn;
     for(int i = 0 ; i < data->tcpls_conns->size ; i++){
         conn = list_get(data->tcpls_conns, i);
+        if(conn->state == PROXY_CLOSED){
+          printf("Removed connection %d\n", conn->transportid);
+          list_remove(data->tcpls_conns, conn);
+          continue;
+        }
         if(FD_ISSET(conn->socket, readset) && conn->state > CLOSED ){
             ret = handle_tcpls_read(conn->tcpls, conn->socket, conn->recvbuf, NULL, data->tcpls_conns);
             if(ret == -2){
@@ -537,12 +545,20 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
             /** put all tcp connections within the read set*/
             for (int i = 0; i < data->tcp_conns->size ; i++){
                 proxy_conn = list_get(data->tcp_conns, i);
+                //printf("adding socket %d to readset\n", proxy_conn->socket);
                 FD_SET(proxy_conn->socket, &readset);
+                if (maxfd < proxy_conn->socket)
+                    maxfd = proxy_conn->socket;
             }
             /** put all tcpls connections within the read set, and the write set if
              * they want to write */
             for (int i = 0; i < data->tcpls_conns->size; i++) {
                 conn = list_get(data->tcpls_conns, i);
+                if(conn->state == PROXY_CLOSED){
+                  printf("Removed connection %d\n", conn->transportid);
+                  list_remove(data->tcpls_conns, conn);
+                  continue;
+                }
                 if (conn->state > CLOSED) {
                     FD_SET(conn->socket , &readset);
                     if (maxfd < conn->socket)

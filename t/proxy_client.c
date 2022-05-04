@@ -71,6 +71,13 @@ static void sig_handler(int signo) {
   }
 }
 
+static void free_data(internal_data_t *data){
+  list_free(data->proxy_addrs);
+  list_free(data->proxy_addrsV6);
+  list_free(data->tcpls_conns);
+  list_free(data->streamlist);
+}
+
 static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     socket, int transportid, void *cbdata) {
   internal_data_t *data = (internal_data_t *) cbdata;
@@ -94,6 +101,8 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
           ctcpls = list_get(conntcpls, i);
           if (ctcpls->tcpls == tcpls && ctcpls->socket == socket && ctcpls->transportid == transportid) {
             ctcpls->state = FAILED;
+            tcpls_buffer_free(ctcpls->tcpls, ctcpls->recvbuf);
+            list_remove(conntcpls, ctcpls);
             break;
           }
         }
@@ -126,7 +135,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       break;
     case CONN_CLOSED:
       {
-        fprintf(stderr, "Received a CONN_CLOSED; removing the connection linked to  socket %d\n", socket);
+        fprintf(stderr, "Received a CONN_CLOSED; removing the connection linked to socket %d\n", socket);
         tcpls_conn_t *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -409,7 +418,7 @@ static int start_tunnel(tcpls_t *tcpls,internal_data_t *data, tcpls_buffer_t *re
   return -1;
 }
 
-static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,const char *input_file){
+static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd){
     int ret;
     tcpls_buffer_t *recvbuf = tcpls_stream_buffers_new(tcpls, 2);
     if(handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, data->tcpls_conns) < 0){
@@ -431,23 +440,61 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,const cha
 
   while(1){
 
+    //cleanup
+    for (int i = 0; i < data->tcpls_conns->size; i++) {
+        conn = list_get(data->tcpls_conns, i);
+        if(conn->state == CLOSED){
+          printf("Removing connection %d", conn->transportid);
+          list_remove(data->tcpls_conns, conn);
+        }
+    }
+
     FD_ZERO(&readset);
     FD_ZERO(&writeset);
     for (int i = 0; i < data->tcpls_conns->size; i++) {
         conn = list_get(data->tcpls_conns, i);
         FD_SET(conn->socket , &readset);
+        FD_SET(conn->socket , &writeset);
         if (maxfd < conn->socket)
           maxfd = conn->socket;
     }
+    FD_SET(io_fd, &readset);
+    
     select(maxfd+1, &readset, &writeset, NULL, &timeout);
     for(int i = 0 ; i < data->tcpls_conns->size ; i++){
       conn = list_get(data->tcpls_conns, i);
       if(FD_ISSET(conn->socket, &readset) && conn->state > CLOSED ){
           ret = handle_tcpls_read(conn->tcpls, conn->socket, recvbuf, data->streamlist, data->tcpls_conns);
           ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, conn->streamid);
-          fprintf(stderr, "Received %ld bytes from peer :%s \n", buf->off, buf->base);
+          fprintf(stderr, "Received %ld bytes from peer : %s \n", buf->off, buf->base);
+          buf->off = 0;
       }
     }
+
+    static const size_t block_size = PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+    uint8_t buf[block_size];
+    conn = list_get(data->tcpls_conns, 0);
+    int to_send = read(io_fd, buf, block_size);
+    if(to_send < 0){
+      fprintf(stderr, "Error reading file\n");
+      return -1;
+    }
+    else if(to_send == 0){
+      fprintf(stderr, "Transfer complete \n");
+      tcpls_stream_close(conn->tcpls->tls, conn->streamid, 1);
+      return 0;
+    } else{
+      while((ret = tcpls_send(tcpls->tls, conn->streamid, buf, to_send)) == TCPLS_CON_LIMIT_REACHED){
+      }
+      if(ret != 0){
+        fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
+            ret, conn->streamid);
+        close(io_fd);
+        return -1;
+      }
+    }
+
+
   }
 
 
@@ -480,7 +527,19 @@ static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_c
     }
     tcpls->enable_multipath = 1;
 
-    return handle_tunnel_transfer(tcpls, data, input_file);
+    int io_fd = 0;
+    if(input_file){
+      io_fd = open(input_file, O_RDONLY);
+      if(io_fd < 0){
+        fprintf(stderr, "Failed to open file %s\n", input_file);
+        return -1;
+      }
+    } 
+
+    handle_tunnel_transfer(tcpls, data, io_fd);
+    free_data(data);
+    
+    return 0;
 
 }
 
