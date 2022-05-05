@@ -224,7 +224,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
               usec_diff += 1000000;
               sec_diff--;
             }
-            printf("Closed connection %d, connection was opened for %ld.%6ld sec\n", transportid, sec_diff , usec_diff);
+            printf("Closed connection %d, connection was opened for %ld.%06ld sec\n", transportid, sec_diff , usec_diff);
             printf("Total send : %ld\n", ctcpls->data_sent);
             printf("Total received : %ld\n", ctcpls->data_received);
             close(ctcpls->tcp->socket);

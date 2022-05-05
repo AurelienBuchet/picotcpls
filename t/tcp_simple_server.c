@@ -85,16 +85,21 @@ int main(int argc, char **argv){
     int maxfd = sock;
     struct timeval timeout;
     memset(&timeout, 0, sizeof(struct timeval));
-    timeout.tv_sec = 100;
     static const size_t block_size = 16384 + 256;
     uint8_t buf[block_size];
-    while (1){
+    long received = 0;
+    while (ret > 0){
+        timeout.tv_sec = 10;
         FD_ZERO(&readset);
         FD_ZERO(&writeset);
         FD_SET(sock , &readset);
-        select(maxfd+1, &readset, &writeset, NULL, &timeout);
+        ret = select(maxfd+1, &readset, &writeset, NULL, &timeout);
         if(FD_ISSET(sock, &readset)){
             int n_rec = read(sock, buf, block_size );
+            if(n_rec == 0){
+                break;
+            }
+            received += n_rec;
             if(input_file){
                 write(io_fd, buf, n_rec);
             }
@@ -103,4 +108,5 @@ int main(int argc, char **argv){
             }
         }
     }
+    printf("No more connection, received %ld bytes \n", received);
 }
