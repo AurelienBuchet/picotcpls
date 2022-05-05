@@ -62,6 +62,9 @@ typedef struct st_tcpls_conn{
     int buf_off_val;
     tcpls_t *tcpls;
     tcp_conn_t *tcp;
+    long data_sent;
+    long data_received;
+    struct timeval start;
 } tcpls_conn_t;
 
 struct st_tcp_conn{
@@ -77,6 +80,8 @@ typedef struct st_internal_data{
     list_t *tcpls_conns;
     list_t *streamlist;
 } internal_data_t;
+
+int verbose = 0;
 
 static void free_data(internal_data_t *data){
 
@@ -196,6 +201,9 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
           if (ctcpls->tcpls == tcpls && ctcpls->socket == socket) {
             ctcpls->transportid = transportid;
             ctcpls->state = PROXY_WAITING_TCP_CONNECT;
+            ctcpls->data_received = 0;
+            ctcpls->data_sent = 0;
+            gettimeofday(&ctcpls->start, NULL);
             break;
           }
         }
@@ -210,8 +218,18 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
           if (ctcpls->tcpls == tcpls && ctcpls->socket == socket && ctcpls->transportid == transportid) {
             ctcpls->socket = 0;
             ctcpls->state = PROXY_CLOSED;
-            printf("Closed connection %d \n", transportid);
+            long sec_diff = now.tv_sec - ctcpls->start.tv_sec;
+            long usec_diff = now.tv_usec - ctcpls->start.tv_usec;
+            if(usec_diff < 0){
+              usec_diff += 1000000;
+              sec_diff--;
+            }
+            printf("Closed connection %d, connection was opened for %ld.%6ld sec\n", transportid, sec_diff , usec_diff);
+            printf("Total send : %ld\n", ctcpls->data_sent);
+            printf("Total received : %ld\n", ctcpls->data_received);
+            close(ctcpls->tcp->socket);
             list_remove(conntcpls, ctcpls);
+            exit(0);
           }
         }
       }
@@ -381,7 +399,9 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
 }
 
 static int handle_tcp_forward(internal_data_t *data, tcp_conn_t *conn_tcp, uint8_t *message, size_t message_len){
-    fprintf(stderr, "forwarding from TCPLS %ld bytes of data\n", message_len);
+    if(verbose){
+      fprintf(stderr, "forwarding from TCPLS %ld bytes of data\n", message_len);
+    }
 
     int ret = write(conn_tcp->socket, message, message_len);
     if(ret < 0){
@@ -389,6 +409,7 @@ static int handle_tcp_forward(internal_data_t *data, tcp_conn_t *conn_tcp, uint8
 
         return ret;
     }
+    conn_tcp->tcpls_conn->data_sent+=ret;
     return 0;
 }
 
@@ -400,7 +421,9 @@ static int handle_tcp_read(internal_data_t *data, tcp_conn_t *conn_tcp){
         perror("read");
         return -1;
     }
-    fprintf(stderr, "forwarding from TCP %d bytes of data\n", to_send);
+    if(verbose){
+      fprintf(stderr, "forwarding from TCP %d bytes of data\n", to_send);
+    }
     int ret;
     tcpls_conn_t *tcpls_conn = conn_tcp->tcpls_conn;
     while ((ret = tcpls_send(tcpls_conn->tcpls->tls, tcpls_conn->streamid, buf, to_send)) == TCPLS_CON_LIMIT_REACHED){
@@ -411,6 +434,7 @@ static int handle_tcp_read(internal_data_t *data, tcp_conn_t *conn_tcp){
           ret, tcpls_conn->streamid);
       return -1;
     }
+    tcpls_conn->data_received += to_send;
     return 0;
 }
 
@@ -592,7 +616,7 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
                     tcpls_add_ips(new_tcpls, ours_sockaddr, NULL, nbr_addr, 0);
                     list_add(data->tcpls_conns, &conntcpls);
                     if (tcpls_accept(new_tcpls, conntcpls.socket, NULL, 0) < 0)
-                    fprintf(stderr, "tcpls_accept returned -1\n");
+                      fprintf(stderr, "tcpls_accept returned -1\n");
                 } 
            }
         }
@@ -632,7 +656,7 @@ int main(int argc, char **argv){
     data.our_addrs = new_list(16, 2);
                 
 
-    while ((ch = getopt(argc, argv, "c:k:z:Z:")) != -1){
+    while ((ch = getopt(argc, argv, "c:k:z:Z:v:")) != -1){
         switch(ch){
             case 'c':{
                 if (ctx.certificates.count != 0) {
@@ -669,6 +693,9 @@ int main(int argc, char **argv){
                 addr[addrlen] = '\0';
                 list_add(data.our_addrsV6,addr);
                 break;
+            }
+            case 'v':{
+              verbose = 1;
             }
             default:{
                 exit(1);

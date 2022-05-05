@@ -13,15 +13,21 @@
 
 
 int main(int argc, char **argv){
-    int listen_sock, len, sock, ch, io_fd = 0;
+    int listen_sock, len, sock, ch, io_fd = 0, reply = 0;
     char *input_file = NULL;
 
-    while((ch = getopt(argc, argv, "f:")) != -1){
+    while((ch = getopt(argc, argv, "rf:")) != -1){
         switch (ch){
         case 'f':{
             input_file = optarg;
             break;
         }
+        case 'r':{
+            reply = 1;
+            break;
+        }
+        default:
+            break;
      }
     }
     argc -= optind;
@@ -68,7 +74,6 @@ int main(int argc, char **argv){
         return -1;
     }
 
-    fprintf(stderr, "Connect :)\n");
     char *hello = "hello";
     int ret = write(sock, hello, 6);
     if(ret < 0){
@@ -90,8 +95,12 @@ int main(int argc, char **argv){
         select(maxfd+1, &readset, &writeset, NULL, &timeout);
         if(FD_ISSET(sock, &readset)){
             int n_rec = read(sock, buf, block_size );
-            write(io_fd, buf, n_rec);
-            n_rec = write(sock, "ack", 4);
+            if(input_file){
+                write(io_fd, buf, n_rec);
+            }
+            if(reply){
+                n_rec = write(sock, "ack", 4);
+            }
         }
     }
 }

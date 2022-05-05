@@ -418,7 +418,7 @@ static int start_tunnel(tcpls_t *tcpls,internal_data_t *data, tcpls_buffer_t *re
   return -1;
 }
 
-static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd){
+static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd, int fast){
     int ret;
     tcpls_buffer_t *recvbuf = tcpls_stream_buffers_new(tcpls, 2);
     if(handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, data->tcpls_conns) < 0){
@@ -466,7 +466,6 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
       if(FD_ISSET(conn->socket, &readset) && conn->state > CLOSED ){
           ret = handle_tcpls_read(conn->tcpls, conn->socket, recvbuf, data->streamlist, data->tcpls_conns);
           ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, conn->streamid);
-          fprintf(stderr, "Received %ld bytes from peer : %s \n", buf->off, buf->base);
           buf->off = 0;
       }
     }
@@ -474,7 +473,10 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
     static const size_t block_size = PTLS_MAX_ENCRYPTED_RECORD_SIZE;
     uint8_t buf[block_size];
     conn = list_get(data->tcpls_conns, 0);
-    int to_send = read(io_fd, buf, block_size);
+    size_t to_send = block_size;
+    if(!fast){
+      to_send = read(io_fd, buf, block_size);
+    }
     if(to_send < 0){
       fprintf(stderr, "Error reading file\n");
       return -1;
@@ -502,7 +504,7 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
 }
 
 
-static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_context_t *ctx,ptls_handshake_properties_t *hsprop, internal_data_t *data,const char *server_name ,const char *input_file){
+static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_context_t *ctx,ptls_handshake_properties_t *hsprop, internal_data_t *data,const char *server_name ,const char *input_file, int fast){
     hsprop->client.esni_keys = resolve_esni_keys(server_name);
     data->tcpls_conns = new_list(sizeof(tcpls_conn_t), 2);
     data->streamlist = new_list(sizeof(streamid_t), 2);
@@ -536,7 +538,7 @@ static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_c
       }
     } 
 
-    handle_tunnel_transfer(tcpls, data, io_fd);
+    handle_tunnel_transfer(tcpls, data, io_fd, fast);
     free_data(data);
     
     return 0;
@@ -559,7 +561,7 @@ int main(int argc, char **argv){
     ptls_context_t ctx = {ptls_openssl_random_bytes, &ptls_get_time, key_exchanges, cipher_suites};
     ptls_handshake_properties_t hsprop = {{{{NULL}}}};
 
-    int ch;
+    int ch, fast = 0;
     const char *proxy_host, *proxy_port,*tcp_host, *tcp_port, *input_file = NULL;
 
     internal_data_t data = {NULL};
@@ -567,11 +569,15 @@ int main(int argc, char **argv){
     data.proxy_addrsV6 = new_list(40,2);
     data.proxy_addrs = new_list(16,2);
 
-    while((ch = getopt(argc, argv, "f:p:P:")) != -1){
+    while((ch = getopt(argc, argv, "fi:p:P:")) != -1){
         switch (ch){
         case 'f':{
-            input_file = optarg;
+            fast = 1;
             break;
+        }
+        case 'i':{
+          input_file = optarg;
+          break;
         }
         case 'p':{
             char addr[16];
@@ -658,5 +664,5 @@ int main(int argc, char **argv){
         data.peer_addr = (struct sockaddr_in6 *) &tcp_sockaddr;
     }
  
-    return start_client(sockaddrs, nbr_addrs, &ctx, &hsprop, &data, proxy_host ,input_file);
+    return start_client(sockaddrs, nbr_addrs, &ctx, &hsprop, &data, proxy_host ,input_file, fast);
 }
