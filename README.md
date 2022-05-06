@@ -470,7 +470,7 @@ xterm c s
 It gives you two xterm terminals, one for the client c, one for the
 server s. You may now run different tests:
 
-On serveur:
+On server:
 
 ./run_test_server_simple_transfer.sh enable_failover
 
@@ -497,6 +497,25 @@ attached to the other IP path to aggregate the bandwidth.
 
 Note that further connection establishments can also be 0-RTT like QUIC, at the
 price of no forward secrecy. We just miss a test for that scenario :-)
+
+### Advanced features testing
+
+We also provide topologies with advanced features : [nat_topo.py](t/ipmininet/nat_topo.py) which contains a nat on the IPv4 path.
+
+To start the test, use 
+```
+% cd t/ipmininet && sudo python test_network_2paths.py
+```
+
+Then for server:
+```
+s ./run_test_server_nat.sh
+```
+On client:
+
+```
+c ./run_test_client_nat.sh
+```
 
 License
 ---

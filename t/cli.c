@@ -324,7 +324,7 @@ static int handle_client_connection_event(tcpls_t *tcpls, tcpls_event_t event,
       list_add(data->socktoremove, &socket);
       break;
     case CONN_OPENED:
-      fprintf(stderr, "Received a CONN_OPENED; adding the socket %d\n", socket);
+      fprintf(stderr, "Received a CONN_OPENED; adding the socket %d to transportid %d \n", socket, transportid);
       list_add(data->socklist, &socket);
       /*If we get a CON_CLOSED, then a CON_OPENED on the same sock value, we
        * need to remove the socket from the socktoremove list xD*/
@@ -438,7 +438,7 @@ static int handle_nat_event(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr
   switch (event) {
     case PING_NAT_RECEIVED:
       {
-        fprintf(stderr, "NAT request received, sending reply");
+        fprintf(stderr, "NAT request received, sending reply\n");
         break;
       }
     case PONG_NAT_RECEIVED:
@@ -449,6 +449,7 @@ static int handle_nat_event(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr
         fprintf(stderr, "Failed to retreived connection\n");
         return -1;
       }
+
 
       if(addr->sa_family == AF_INET){
           struct sockaddr_in con_sa;
@@ -505,6 +506,9 @@ static int handle_nat_event(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr
         } else{
           fprintf(stderr,"Local address and port match received ones\n");
         }
+      }
+      if(transportid == 0){
+        exit(0);
       }
       break;
     }
@@ -732,6 +736,32 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
   }
   /** continue */
   return 1;
+}
+
+static int handle_server_nat_test(list_t *conn_tcpls, fd_set *readset){
+   int ret = 1;
+
+  for (int i = 0; i < conn_tcpls->size; i++) {
+    struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
+    if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
+      ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, conn->recvbuf, NULL, conn_tcpls);
+      if (ret == -2) {
+        fprintf(stderr, "Setting socket %d as primary\n", conn->conn_fd);
+        conn->is_primary = 1;
+        ret = 0;
+      }
+      if(conn->recvbuf->bufkind == STREAMBASED){
+        ptls_buffer_t *buf = tcpls_get_stream_buffer(conn->recvbuf, conn->streamid);
+        if(buf){
+          buf->off = 0;
+        }
+      } else{
+        conn->recvbuf->decryptbuf->off = 0;
+      }
+      break;
+    }
+  }
+  return ret;
 }
 
 static int handle_server_zero_rtt_test(list_t *conn_tcpls, fd_set *readset) {
@@ -1183,12 +1213,14 @@ static int handle_client_nat_test(tcpls_t *tcpls, struct cli_data *data) {
     fprintf(stderr, "tcpls_connect failed with err %d\n", err);
     return 1;
   }
+  fprintf(stderr, "Connected\n");
   tcpls_buffer_t *recvbuf = tcpls_stream_buffers_new(tcpls, 1);
   if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
     ret = -1;
   }
-  tcpls_ping_nat(tcpls, 0);
   fprintf(stderr, "Handshake done checking for nat\n");
+
+  tcpls_ping_nat(tcpls, 0);
 
   int maxfds = 0;
   fd_set readfds, writefds, exceptfds;
@@ -1557,6 +1589,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   ctx->stream_event_cb = &handle_stream_event;
   ctx->address_event_cb = &handle_address_event;
   ctx->rtt_event_cb = &handle_rtt_event;
+  ctx->nat_event_cb = &handle_nat_event;
   ctx->cb_data = conn_tcpls;
   socklen_t salen;
   struct timeval timeout;
@@ -1665,7 +1698,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             close(new_conn);
           else {
             fprintf(stderr, "Accepting a new connection\n");
-            tcpls_t *new_tcpls = tcpls_new(ctx,  1);
+            tcpls_t *new_tcpls = tcpls_new(ctx, 1);
+      
             new_tcpls->enable_failover = failover_enabled;
             struct conn_to_tcpls conntcpls;
             memset(&conntcpls, 0, sizeof(conntcpls));
@@ -1674,7 +1708,6 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             conntcpls.tcpls = new_tcpls;
             if (test == T_MULTIPATH || new_tcpls->enable_failover || test == T_AGGREGATION || test == T_AGGREGATION_TIME || test == T_MULTIPLEXING)
               conntcpls.tcpls->enable_multipath = 1;
-
             if (test == T_SIMPLE_TRANSFER || test == T_MULTIPATH || test == T_AGGREGATION || test == T_AGGREGATION_TIME)// || test == T_MULTIPLEXING)
               conntcpls.recvbuf = tcpls_aggr_buffer_new(conntcpls.tcpls);
             else{
@@ -1685,13 +1718,21 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             /** ADD our ips  -- This might worth to be ctx and instance-based?*/
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
             list_add(conn_tcpls, &conntcpls);
-            if (tcpls_accept(new_tcpls, conntcpls.conn_fd, NULL, 0) < 0)
-              fprintf(stderr, "tcpls_accept returned -1\n");
+            int ret;
+            if ( (ret = tcpls_accept(new_tcpls, conntcpls.conn_fd, NULL, 0)) < 0)
+              fprintf(stderr, "tcpls_accept returned %d\n", ret);
+            else
+              fprintf(stderr, "New connection on transportid %d\n",ret);
           }
         }
       }
       int ret;
       switch (test) {
+        case T_NAT:
+            if ((ret = handle_server_nat_test(conn_tcpls, &readset)) < -1) {
+              goto Exit;
+            }
+          break;
         case T_SIMPLE_TRANSFER:
         case T_MULTIPATH:
         case T_AGGREGATION:
