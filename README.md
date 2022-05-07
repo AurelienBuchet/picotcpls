@@ -504,7 +504,7 @@ We also provide topologies with advanced features : [nat_topo.py](t/ipmininet/na
 
 To start the test, use 
 ```
-% cd t/ipmininet && sudo python test_network_2paths.py
+% cd t/ipmininet && sudo python nat_topo.py
 ```
 
 Then for server:
