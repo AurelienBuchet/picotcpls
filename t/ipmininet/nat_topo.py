@@ -36,11 +36,11 @@ class MyTopology(IPTopo):
         cr1_v6[c].addParams(ip=("2042:abe::1/64"))
         cr1_v6[r1].addParams(ip=("2042:abe::2/64"))
 
-        r1nat = self.addLink(r1, r2, delay="10ms", bw=30)
+        r1nat = self.addLink(r1, nat, delay="10ms", bw=30)
         r1nat[r1].addParams(ip=("10.1.1.1/24"))
         r1nat[nat].addParams(ip=("10.1.1.2/24"))
 
-        natr2 = self.addLink(r1, r2, delay="10ms", bw=30)
+        natr2 = self.addLink(nat, r2, delay="10ms", bw=30)
         natr2[nat].addParams(ip=("10.1.2.1/24"))
         natr2[r2].addParams(ip=("10.1.2.2/24"))
 
