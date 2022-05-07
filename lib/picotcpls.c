@@ -849,6 +849,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
       return -1;
     int ret = get_con_info_from_addrs(tcpls, our_v4, peer_v4, NULL, NULL, &con);
     if (ret) {
+      printf("new conn v4\n");
       /** We didn't find a con with those addrs */
       memset(&newconn, 0, sizeof(connect_info_t));
       newconn.state = CONNECTED;
@@ -878,6 +879,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     int ret = get_con_info_from_addrs(tcpls, NULL, NULL, our_v6, peer_v6, &con);
     if (ret) {
       /** We didn't find a con with those addrs */
+      printf("new conn v6\n");
       memset(&newconn, 0, sizeof(connect_info_t));
       newconn.state = CONNECTED;
       newconn.socket = socket;
@@ -2912,6 +2914,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           struct sockaddr_in con_rcv;
           con_rcv.sin_family = AF_INET;
           con_rcv.sin_port = *(in_port_t*) &input[offset];
+          offset += sizeof(in_port_t);
           con_rcv.sin_addr = *(struct in_addr*)&input[offset];
 
           if(ptls->ctx->nat_event_cb){
@@ -2922,6 +2925,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           struct sockaddr_in6 con_rcv;
           con_rcv.sin6_family = AF_INET6;
           con_rcv.sin6_port = *(in_port_t*) &input[offset];
+          offset += sizeof(in_port_t);
           con_rcv.sin6_addr = *(struct in6_addr*)&input[offset];
 
           if(ptls->ctx->nat_event_cb){
