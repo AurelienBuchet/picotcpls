@@ -44,9 +44,10 @@ class MyTopology(IPTopo):
         natr2[nat].addParams(ip=("10.1.2.1/24"))
         natr2[r2].addParams(ip=("10.1.2.2/24"))
 
-        r1r2 = self.addLink(r1, r2, delay="10ms", bw=30)
-        r1r2[r1].addParams(ip=("10.1.0.1/24"))
-        r1r2[r2].addParams(ip=("10.1.0.2/24"))
+        #This is replaced by NAT
+        #r1r2 = self.addLink(r1, r2, delay="10ms", bw=30)
+        #r1r2[r1].addParams(ip=("10.1.0.1/24"))
+        #r1r2[r2].addParams(ip=("10.1.0.2/24"))
 
         r2r3 = self.addLink(r2, r3, delay="10ms", bw=30)
         r2r3[r2].addParams(ip=("10.2.0.1/24"))
@@ -58,7 +59,7 @@ class MyTopology(IPTopo):
         r3s[r3].addParams(ip=("50.50.50.1/24"))
         r3s_v6[s].addParams(ip=("2042:cafe::1/64"))
         r3s_v6[r3].addParams(ip=("2042:cafe::a/64"))
-    
+
         r1r4 = self.addLink(r1, r4, delay="20ms", bw=30)
         r1r4[r1].addParams(ip=("2042:1a::1/64"))
         r1r4[r4].addParams(ip=("2042:1a::a/64"))
@@ -66,15 +67,17 @@ class MyTopology(IPTopo):
         r4r3 = self.addLink(r4, r3, delay="20ms", bw=30)
         r4r3[r4].addParams(ip=("2042:2b::2/64"))
         r4r3[r3].addParams(ip=("2042:2b::b/64"))
-    
-        r1.addDaemon(STATIC, static_routes=[StaticRoute("50.50.50.0/24",\
-                                                        "10.1.0.2"),\
-                                            #StaticRoute("50.50.50.0/24", \
-                                            #            "10.1.1.2"),
+
+        r1.addDaemon(STATIC, static_routes=[#StaticRoute("50.50.50.0/24",\
+                                            #            "10.1.0.2"),\
+                                            StaticRoute("50.50.50.0/24", \
+                                                        "10.1.1.2"),
                                             StaticRoute("10.2.0.0/24",\
                                                         "10.1.0.2"),\
                                             StaticRoute("2042:cafe::/64",\
                                                         "2042:1a::a")])
+
+ 
         r2.addDaemon(STATIC, static_routes=[StaticRoute("50.50.50.0/24",\
                                                         "10.2.0.2"),\
                                             StaticRoute("130.104.205.0/24",\
@@ -85,7 +88,7 @@ class MyTopology(IPTopo):
                                                         "10.2.0.1"),\
                                             StaticRoute("2042:abe::/64",\
                                                         "2042:2b::2")])
-        
+
         r4.addDaemon(STATIC, static_routes=[StaticRoute("2042:abe::/64",\
                                                       "2042:1a::1"),\
                                           StaticRoute("2042:cafe::/64",\
@@ -99,6 +102,11 @@ try:
     net.start()
     net["c"].cmd("ip -6 route add default via 2042:abe::2")
     net["s"].cmd("ip -6 route add default via 2042:cafe::a")
+    net["nat"].cmd("ip route add 50.50.50.0/24 via 10.1.2.2")
+    net["nat"].cmd("ip route add 130.104.205.0/24 via 10.1.1.1")
+    #TODO : add route to the nat from r3
+    #nat cmd echo 1 > /proc/sys/net/ipv4/ip_forward
+#iptables -t nat -A POSTROUTING -o nat-eth1 -j MASQUERADE
     IPCLI(net)
 finally:
     net.stop()
