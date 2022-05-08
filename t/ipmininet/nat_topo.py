@@ -81,10 +81,12 @@ class MyTopology(IPTopo):
         r2.addDaemon(STATIC, static_routes=[StaticRoute("50.50.50.0/24",\
                                                         "10.2.0.2"),\
                                             StaticRoute("130.104.205.0/24",\
-                                                        "10.1.0.1")])
+                                                        "10.1.2.1")])
         r3.addDaemon(STATIC, static_routes=[StaticRoute("130.104.205.0/24",\
                                                         "10.2.0.1"),\
                                             StaticRoute("10.1.0.0/24",\
+                                                        "10.2.0.1"),\
+                                            StaticRoute("10.1.2.0/24",\
                                                         "10.2.0.1"),\
                                             StaticRoute("2042:abe::/64",\
                                                         "2042:2b::2")])
@@ -104,9 +106,9 @@ try:
     net["s"].cmd("ip -6 route add default via 2042:cafe::a")
     net["nat"].cmd("ip route add 50.50.50.0/24 via 10.1.2.2")
     net["nat"].cmd("ip route add 130.104.205.0/24 via 10.1.1.1")
-    #TODO : add route to the nat from r3
-    #nat cmd echo 1 > /proc/sys/net/ipv4/ip_forward
-#iptables -t nat -A POSTROUTING -o nat-eth1 -j MASQUERADE
+
+    net["nat"].cmd("echo 1 > /proc/sys/net/ipv4/ip_forward")
+    net["nat"].cmd('iptables -t "nat" -A POSTROUTING -o nat-eth1 -j MASQUERADE')
     IPCLI(net)
 finally:
     net.stop()
