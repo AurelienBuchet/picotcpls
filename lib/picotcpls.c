@@ -1865,6 +1865,7 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
     ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
     if (restore_buf && tcpls->buffrag->capacity)
       tcpls->buffrag->off = restore_buf;
+    ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
     /* That MUST be a control message */
     ptls_buffer_t deccontrolbuf;
     ptls_buffer_init(&deccontrolbuf, "", 0);

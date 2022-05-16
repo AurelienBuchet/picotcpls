@@ -76,6 +76,7 @@ static void free_data(internal_data_t *data){
   list_free(data->proxy_addrsV6);
   list_free(data->tcpls_conns);
   list_free(data->streamlist);
+  free(data->peer_addr);
 }
 
 static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
@@ -654,15 +655,38 @@ int main(int argc, char **argv){
     }
 
     struct sockaddr_storage tcp_sockaddr;
-    if (resolve_address((struct sockaddr*)&tcp_sockaddr, &sa_len, tcp_host, tcp_port,AF_INET6, SOCK_STREAM, IPPROTO_TCP) != 0){
+    if (resolve_address((struct sockaddr*)&tcp_sockaddr, &sa_len, tcp_host, tcp_port, AF_INET6 , SOCK_STREAM, IPPROTO_TCP) != 0){
         fprintf(stderr, "Failed to resolve addr: %s\n", proxy_host);        
         exit(1);
     }
     if(tcp_sockaddr.ss_family == AF_INET){
         //Convert
+        struct sockaddr_in *v4 = (struct sockaddr_in *) &tcp_sockaddr;
+        struct sockaddr_in6 v6;
+        char myIPString[40];
+        inet_ntop(AF_INET, &v4->sin_addr, myIPString, sizeof(myIPString));
+        printf("%s\n", myIPString);
+        memset(&v6, 0, sizeof(struct sockaddr_in6));
+        v6.sin6_family = AF_INET6;
+        v6.sin6_port = v4->sin_port;
+        uint8_t *addr = &v6.sin6_addr.s6_addr;
+        memset(addr+10, 0xff, 2);
+        memcpy(addr+12, &v4->sin_addr, sizeof(struct in_addr));
+        //inet_ntop(AF_INET6, &v6.sin6_addr, myIPString, sizeof(myIPString));
+        //printf("%s\n", myIPString);
+        data.peer_addr = malloc(sizeof(struct sockaddr_in6));
+        memcpy(data.peer_addr, &v6, sizeof(struct sockaddr_in6));
     } else{
+        printf("v6\n");
         data.peer_addr = (struct sockaddr_in6 *) &tcp_sockaddr;
+        //data.peer_addr = malloc(sizeof(struct sockaddr_in6));
+        //memcpy(data.peer_addr, &tcp_sockaddr, sizeof(struct sockaddr_in6));
     }
  
+    char myIPString[40];
+    inet_ntop(AF_INET6, &data.peer_addr->sin6_addr, myIPString, sizeof(myIPString));
+    
+    printf("%s:%hu\n", myIPString, ntohs(data.peer_addr->sin6_port));
+
     return start_client(sockaddrs, nbr_addrs, &ctx, &hsprop, &data, proxy_host ,input_file, fast);
 }
