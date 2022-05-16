@@ -362,14 +362,16 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
     memset(&peer_addr, 0, sizeof(struct sockaddr_in6));
     peer_addr.sin6_family = AF_INET6;
     peer_addr.sin6_port = port;
-    peer_addr.sin6_addr = addr;
+    memcpy(&peer_addr.sin6_addr, &addr, sizeof(struct in6_addr));
+    //peer_addr.sin6_addr = addr;
 
     int sock = socket(AF_INET6, SOCK_STREAM, 0);
     char addr_str[INET6_ADDRSTRLEN];
-    inet_ntop(AF_INET6, &addr, addr_str, INET6_ADDRSTRLEN);
+    inet_ntop(AF_INET6, &peer_addr.sin6_addr, addr_str, INET6_ADDRSTRLEN);
 
     if(connect(sock, (struct sockaddr *) &peer_addr, sizeof(struct sockaddr_in6)) != 0){
-        fprintf(stderr, "Fail to establish TCP tunnel to %s\n", addr_str);
+        perror("Connect");
+        fprintf(stderr, "Fail to establish TCP tunnel to %s:%hu\n", addr_str, ntohs(peer_addr.sin6_port));
 
         return -1;
     }
