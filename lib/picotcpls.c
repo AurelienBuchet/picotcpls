@@ -1155,27 +1155,27 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
   uint32_t streamid = htonl(stream->streamid);
   memcpy(input, &streamid, 4);
   /** queue the message in the sending buffer */
-  if (stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf, tcpls->tls->traffic_protection.enc.aead, input, type, 4)){
-    printf("Error while closing stream %u", streamid);
-  }
-  if (sendnow) {
-    int ret;
-    ret = do_send(tcpls, 0, con);
-    /* check whether we sent everything */
-    if (!tcpls->failover_recovering && !did_we_sent_everything(tcpls, 0, ret))
-      return -1;
-  }
-  /** queue the message in the sending buffer */
-  // if (stream_send_control_message(tcpls->tls, stream->streamid, stream->sendbuf, stream->aead_enc, input, type, 4)){
+  // if (stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf, tcpls->tls->traffic_protection.enc.aead, input, type, 4)){
   //   printf("Error while closing stream %u", streamid);
   // }
   // if (sendnow) {
   //   int ret;
-  //   ret = do_send(tcpls, stream, con);
+  //   ret = do_send(tcpls, 0, con);
   //   /* check whether we sent everything */
-  //   if (!tcpls->failover_recovering && !did_we_sent_everything(tcpls, stream, ret))
+  //   if (!tcpls->failover_recovering && !did_we_sent_everything(tcpls, 0, ret))
   //     return -1;
   // }
+  /** queue the message in the sending buffer */
+  if (stream_send_control_message(tcpls->tls, stream->streamid, stream->sendbuf, stream->aead_enc, input, type, 4)){
+    printf("Error while closing stream %u", streamid);
+  }
+  if (sendnow) {
+    int ret;
+    ret = do_send(tcpls, stream, con);
+    /* check whether we sent everything */
+    if (!tcpls->failover_recovering && !did_we_sent_everything(tcpls, stream, ret))
+      return -1;
+  }
   else {
     // XXX ensure that the message is when housekeeping! 
     stream->marked_for_close = 1;
@@ -1824,7 +1824,7 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
   for (int i = 0; i < tcpls->streams->size && rret; i++) {
     tcpls_stream_t *stream = list_get(tcpls->streams, i);
     /* this is a stream attached to this connection */
-    //if (con->this_transportid == stream->transportid) {
+    if (con->this_transportid == stream->transportid) {
       ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
       // get the right  aead context matching the stream id
       // This is done for compatibility with original PTLS's unit tests
@@ -1858,12 +1858,11 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
       if (rret == PTLS_ALERT_BAD_RECORD_MAC && restore_buf && con->buffrag->capacity) {
         con->buffrag->off = restore_buf;
       }
-      /*
     }
-    */
   }
   /* finally try with the default aead */
   if (rret == PTLS_ALERT_BAD_RECORD_MAC) {
+    ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
     if (restore_buf && tcpls->buffrag->capacity)
       tcpls->buffrag->off = restore_buf;
     /* That MUST be a control message */
@@ -1875,6 +1874,7 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
       *input_off += consumed;
     } while (rret == 0 && *input_off < input_size);
     tcpls->buffrag->off = 0;
+    tcpls->tls->traffic_protection.dec.aead = remember_aead;
   }
   return rret;
 }
