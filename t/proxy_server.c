@@ -128,19 +128,26 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
   strcat(timebuf, ".");
   sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
   strcat(timebuf, usecbuf);
-  fprintf(stderr, "%s Stream event %d\n", timebuf, event);
+  if(verbose){
+    fprintf(stderr, "%s Stream event %d\n", timebuf, event);
+  }
   switch (event) {
     case STREAM_OPENED:
     case STREAM_NETWORK_RECOVERED:
-      if (event == STREAM_OPENED)
-        fprintf(stderr, "Handling STREAM_OPENED callback %d \n", transportid);
-      else
-        fprintf(stderr, "Handling STREAM_NETWORK_RECOVERED callback\n");
+      if (event == STREAM_OPENED){
+        if(verbose)
+          fprintf(stderr, "Handling STREAM_OPENED callback %d \n", transportid);
+      }
+      else{
+        if(verbose)
+          fprintf(stderr, "Handling STREAM_NETWORK_RECOVERED callback\n");
+      }
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
           conn_tcpls->streamid = streamid;
-          fprintf(stderr, "Stream id of connection %d is now %u\n", transportid, streamid);
+          if(verbose)
+            fprintf(stderr, "Stream id of connection %d is now %u\n", transportid, streamid);
           break;
         } 
       }
@@ -148,14 +155,18 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
       /** currently assumes 2 streams */
     case STREAM_CLOSED:
     case STREAM_NETWORK_FAILURE:
-      if (event == STREAM_CLOSED)
-        fprintf(stderr, "Handling STREAM_CLOSED callback\n");
+      if (event == STREAM_CLOSED){
+        if(verbose)
+          fprintf(stderr, "Handling STREAM_CLOSED callback\n");
+      }
       else
-        fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback\n");
+        if(verbose)
+          fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (tcpls == conn_tcpls->tcpls && conn_tcpls->transportid == transportid && conn_tcpls->streamid == streamid) {
-          fprintf(stderr, "Woh! we're stopping to write on the connection linked to transportid %d streamid %u\n", transportid, streamid);
+          if(verbose)
+            fprintf(stderr, "Woh! we're stopping to write on the connection linked to transportid %d streamid %u\n", transportid, streamid);
         }
       }
     default: break;
@@ -176,11 +187,13 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
   strcat(timebuf, ".");
   sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
   strcat(timebuf, usecbuf);
-  //fprintf(stderr, "%s Connection event %d\n", timebuf, event);
+  if(verbose)
+    fprintf(stderr, "%s Connection event %d\n", timebuf, event);
   switch (event) {
     case CONN_FAILED:
       {
-        fprintf(stderr, "Received a CONN_FAILED on socket %d\n", socket);
+        if(verbose)
+          fprintf(stderr, "Received a CONN_FAILED on socket %d\n", socket);
         tcpls_conn_t *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -194,7 +207,8 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       break;
     case CONN_OPENED:
       {
-        fprintf(stderr, "Received a CONN_OPENED; adding transportid %d to the socket %d\n", transportid, socket);
+        if(verbose)
+          fprintf(stderr, "Received a CONN_OPENED; adding transportid %d to the socket %d\n", transportid, socket);
         tcpls_conn_t *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -211,7 +225,8 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       break;
     case CONN_CLOSED:
       {
-        //fprintf(stderr, "Received a CONN_CLOSED; removing the connection linked to socket %d\n", socket);
+        if(verbose)
+          fprintf(stderr, "Received a CONN_CLOSED; removing the connection linked to socket %d\n", socket);
         tcpls_conn_t *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -343,7 +358,6 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
 
 static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t *message, size_t message_len){
     if(message_len < 20){
-      fprintf(stderr, "Message is too short length\n");
       return -1;
     }
     tunnel_message_type type = message[0];
@@ -375,7 +389,8 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
 
         return -1;
     }
-    fprintf(stderr, "Established TCP tunnel to %s on socket %d\n", addr_str, sock);
+    if(verbose)
+      fprintf(stderr, "Established TCP tunnel to %s on socket %d\n", addr_str, sock);
     tcp_conn_t *tcp_new = malloc(sizeof(tcp_conn_t));
     tcp_new->socket = sock;
     tcp_new->tcpls_conn = conn;
@@ -454,11 +469,8 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
         if(FD_ISSET(conn->socket, readset) && conn->state > CLOSED ){
             ret = handle_tcpls_read(conn->tcpls, conn->socket, conn->recvbuf, NULL, data->tcpls_conns);
             if(ret == -2){
-                fprintf(stderr, "Primary connection connected\n");
-                /*streamid_t streamid = tcpls_stream_new(conn->tcpls->tls, NULL, (struct sockaddr*) &conn->tcpls->v6_addr_llist->addr);
-                fprintf(stderr, "Sending a STREAM_ATTACH on the new path\n");
-                if (tcpls_streams_attach(conn->tcpls->tls, 0, 1) < 0)
-                  fprintf(stderr, "Failed to attach stream %u\n", streamid);*/
+                if(verbose)
+                  fprintf(stderr, "Primary connection connected\n");
                 return 0;
             } else if(ret < 0) {
               fprintf(stderr, "Read failed %d\n", ret);
@@ -469,7 +481,6 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
                 if(ret < 0){
                   fprintf(stderr, "tcpls_send failed %d\n", ret);
                 }
-                fprintf(stderr, "Brute force stream creation\n");
               }
 
                 ptls_buffer_t *buf = tcpls_get_stream_buffer(conn->recvbuf, conn->streamid);
@@ -478,7 +489,8 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
                 }
                 if(conn->state == PROXY_WAITING_TCP_CONNECT){
                     if(buf){
-                        fprintf(stderr, "Handling a TCP Connect\n");
+                        if(verbose)
+                          fprintf(stderr, "Handling a TCP Connect\n");
                         ret = handle_tcp_connect(data, conn,buf->base, buf->off);
                         buf->off = 0;
                     }
@@ -605,7 +617,8 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
                 else if (new_conn > FD_SETSIZE)
                     close(new_conn);
                 else {
-                    fprintf(stderr, "Accepting a new connection\n");
+                    if(verbose)
+                      fprintf(stderr, "Accepting a new connection\n");
                     tcpls_t *new_tcpls = tcpls_new(ctx,  1);
                     new_tcpls->enable_multipath = 1;
                     tcpls_conn_t conntcpls;
@@ -627,10 +640,6 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
             //goto Exit;
         }
     }
-
-    Exit:
-        free_data(data);
-        exit(0);
 }
 
 
@@ -658,7 +667,7 @@ int main(int argc, char **argv){
     data.our_addrs = new_list(16, 2);
                 
 
-    while ((ch = getopt(argc, argv, "c:k:z:Z:v:")) != -1){
+    while ((ch = getopt(argc, argv, "c:k:z:Z:v")) != -1){
         switch(ch){
             case 'c':{
                 if (ctx.certificates.count != 0) {
@@ -698,6 +707,7 @@ int main(int argc, char **argv){
             }
             case 'v':{
               verbose = 1;
+              break;
             }
             default:{
                 exit(1);

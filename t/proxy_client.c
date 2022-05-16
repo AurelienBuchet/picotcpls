@@ -29,6 +29,12 @@
 #include "containers.h"
 #include "util.h"
 
+typedef enum performance_test_t{
+    T_THROUGHPUT,
+    T_LATENCY,
+    T_NOTEST
+} performance_test;
+
 typedef enum tunnel_message_type_t {
     TCP_CONNECT,
     TCP_CONNECT_OK,
@@ -63,7 +69,11 @@ typedef struct st_internal_data{
 
     list_t *tcpls_conns;
     list_t *streamlist;
+
+    struct timeval test_start_timer;
 } internal_data_t;
+
+int verbose = 0;
 
 static void sig_handler(int signo) {
   if (signo == SIGPIPE) {
@@ -92,11 +102,15 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
   strcat(timebuf, ".");
   sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
   strcat(timebuf, usecbuf);
-  fprintf(stderr, "%s Connection event %d\n", timebuf, event);
+  if(verbose){
+    fprintf(stderr, "%s Connection event %d\n", timebuf, event);
+  }
   switch (event) {
     case CONN_FAILED:
       {
-        fprintf(stderr, "Received a CONN_FAILED on socket %d\n", socket);
+        if(verbose){
+          fprintf(stderr, "Received a CONN_FAILED on socket %d\n", socket);
+        }
         tcpls_conn_t *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -111,7 +125,9 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       break;
     case CONN_OPENED:
       {
-        fprintf(stderr, "Received a CONN_OPENED;\n");
+        if(verbose){
+          fprintf(stderr, "Received a CONN_OPENED;\n");
+        }
         tcpls_conn_t *ctcpls;
         int found = 0;
         for (int i = 0; i < conntcpls->size; i++) {
@@ -124,19 +140,23 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
           }
         }
         if(!found){
-          tcpls_conn_t conn_new = {NULL};
+          tcpls_conn_t conn_new;
           conn_new.state = CONNECTED;
           conn_new.socket = socket;
           conn_new.transportid = transportid;
           conn_new.tcpls = tcpls;
           list_add(conntcpls, &conn_new);
-          fprintf(stderr, "adding transportid %d to the socket %d\n", transportid, socket);
+          if(verbose){
+            fprintf(stderr, "adding transportid %d to the socket %d\n", transportid, socket);
+          }
         }
       }
       break;
     case CONN_CLOSED:
       {
-        fprintf(stderr, "Received a CONN_CLOSED; removing the connection linked to socket %d\n", socket);
+        if(verbose){
+          fprintf(stderr, "Received a CONN_CLOSED; removing the connection linked to socket %d\n", socket);
+        }
         tcpls_conn_t *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -164,14 +184,20 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
   strcat(timebuf, ".");
   sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
   strcat(timebuf, usecbuf);
-  fprintf(stderr, "%s Stream event %d\n", timebuf, event);
+  if(verbose){
+    fprintf(stderr, "%s Stream event %d\n", timebuf, event);
+  }
   switch (event) {
     case STREAM_NETWORK_RECOVERED:
-      fprintf(stderr, "Handling STREAM_NETWORK_RECOVERED callback\n");
+      if(verbose){
+        fprintf(stderr, "Handling STREAM_NETWORK_RECOVERED callback\n");
+      }
       list_add(data->streamlist, &streamid);
       break;
     case STREAM_OPENED:
-      fprintf(stderr, "Handling STREAM_OPENED callback new stream %u\n", streamid);
+      if(verbose){
+        fprintf(stderr, "Handling STREAM_OPENED callback new stream %u\n", streamid);
+      }
       list_add(data->streamlist, &streamid);
       tcpls_conn_t *conn;
       for (int i = 0; i < data->tcpls_conns->size; i++){
@@ -179,18 +205,24 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
         conn = list_get(data->tcpls_conns, i);
         if (conn->tcpls == tcpls && conn->transportid == transportid) {
           conn->streamid = streamid;
-          fprintf(stderr, "Stream id of connection %d is now %u\n", transportid, streamid);
+          if(verbose){
+            fprintf(stderr, "Stream id of connection %d is now %u\n", transportid, streamid);
+          }
           break;
         } 
       }
       
       break;
     case STREAM_NETWORK_FAILURE:
-      fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback, removing stream %u\n", streamid);
+      if(verbose){
+        fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback, removing stream %u\n", streamid);
+      }
       list_remove(data->streamlist, &streamid);
       break;
     case STREAM_CLOSED: ;
-      fprintf(stderr, "Handling STREAM_CLOSED callback, removing stream %u\n", streamid);
+      if(verbose){
+       fprintf(stderr, "Handling STREAM_CLOSED callback, removing stream %u\n", streamid);
+      }
       list_remove(data->streamlist, &streamid);
       break;
     default: break;
@@ -363,15 +395,11 @@ static int start_tunnel(tcpls_t *tcpls,internal_data_t *data, tcpls_buffer_t *re
         }
     }
     return -1;
-    //fprintf(stderr, "No stream opened yet\n");
-    /*streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*) &tcpls->v6_addr_llist->addr);
-    fprintf(stderr, "Sending a STREAM_ATTACH on the new path\n");
-    if (tcpls_streams_attach(tcpls->tls, 0, 1) < 0)
-      fprintf(stderr, "Failed to attach stream %u\n", streamid);*/
   }
 
-
-  fprintf(stderr, "opening tunnel\n");
+  if(verbose){
+    fprintf(stderr, "opening tunnel\n");
+  }
 
   while((ret = tcpls_send(tcpls->tls, *stream, buf, 22)) == TCPLS_CON_LIMIT_REACHED){
   }
@@ -412,21 +440,119 @@ static int start_tunnel(tcpls_t *tcpls,internal_data_t *data, tcpls_buffer_t *re
           return -1;
         }
         buf->off = 0;
-        fprintf(stderr, "TCP tunnel opened \n");
+        if(verbose){
+          fprintf(stderr, "TCP tunnel opened %d\n", verbose);
+        }
         return 0;
     }
   }
   return -1;
 }
 
-static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd, int fast){
+static int handle_latency_test(tcpls_t * tcpls, internal_data_t *data, tcpls_buffer_t * recvbuf){
+  fd_set readset, writeset;
+  int maxfd = 0;
+  struct timeval timeout;
+  memset(&timeout, 0, sizeof(struct timeval));
+  tcpls_conn_t *conn;
+  timeout.tv_sec = 100;
+  while(1){
+    FD_ZERO(&readset);
+    FD_ZERO(&writeset);
+    for (int i = 0; i < data->tcpls_conns->size; i++) {
+        conn = list_get(data->tcpls_conns, i);
+        FD_SET(conn->socket , &readset);
+        if (maxfd < conn->socket)
+          maxfd = conn->socket;
+    }
+    select(maxfd+1, &readset, &writeset, NULL, &timeout);
+    for(int i = 0 ; i < data->tcpls_conns->size ; i++){
+      conn = list_get(data->tcpls_conns, i);
+      if(FD_ISSET(conn->socket, &readset) && conn->state > CLOSED ){
+          int ret = handle_tcpls_read(conn->tcpls, conn->socket, recvbuf, data->streamlist, data->tcpls_conns);
+          if(ret < 0){
+            fprintf(stderr, "tcpls read return %d\n", ret);
+          }
+          ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, conn->streamid);
+          if(buf->off > 0){
+            struct timeval now;
+            gettimeofday(&now, NULL);
+            time_t sec = now.tv_sec - data->test_start_timer.tv_sec;
+            suseconds_t usec = now.tv_usec - data->test_start_timer.tv_usec;
+            if(usec < 0){
+              usec += 1000000;
+              sec -= 1;
+            }
+            printf("latency : %ld.%06ld\n", sec,usec);
+            buf->off = 0;
+            return 0;
+          }
+      }
+    }
+  }
+}
+
+static int handle_throughput_test(tcpls_t * tcpls, internal_data_t *data, tcpls_buffer_t * recvbuf){
+  fd_set readset, writeset;
+  int maxfd = 0;
+  struct timeval timeout;
+  memset(&timeout, 0, sizeof(struct timeval));
+  tcpls_conn_t *conn;
+  timeout.tv_sec = 100;
+  long total_sent = 0;
+  int ret;
+  while(1){
+    FD_ZERO(&readset);
+    FD_ZERO(&writeset);
+    for (int i = 0; i < data->tcpls_conns->size; i++) {
+        conn = list_get(data->tcpls_conns, i);
+        FD_SET(conn->socket , &readset);
+        FD_SET(conn->socket , &writeset);
+        if (maxfd < conn->socket)
+          maxfd = conn->socket;
+    }
+    select(maxfd+1, &readset, &writeset, NULL, &timeout);
+    for(int i = 0 ; i < data->tcpls_conns->size ; i++){
+      conn = list_get(data->tcpls_conns, i);
+      if(FD_ISSET(conn->socket, &readset) && conn->state > CLOSED ){
+          ret = handle_tcpls_read(conn->tcpls, conn->socket, recvbuf, data->streamlist, data->tcpls_conns);
+          ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, conn->streamid);
+          if(buf->off > 0){
+            buf->off = 0; // ignore received data
+          }
+      }      
+      if(FD_ISSET(conn->socket, &writeset) && conn->state > CLOSED){
+        static const size_t block_size = 4 * PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+        uint8_t buf[block_size];
+        conn = list_get(data->tcpls_conns, 0);
+        size_t to_send = block_size;
+        while((ret = tcpls_send(tcpls->tls, conn->streamid, buf, to_send)) == TCPLS_CON_LIMIT_REACHED){
+        }
+        if(ret != 0){
+          fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
+              ret, conn->streamid);
+          return -1;
+        }
+        total_sent += to_send;
+      }
+    }
+    if(total_sent >= 10000000000){
+      return 0;
+    }
+  }
+}
+
+
+static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd, int fast, performance_test test){
     int ret;
     tcpls_buffer_t *recvbuf = tcpls_stream_buffers_new(tcpls, 2);
     if(handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, data->tcpls_conns) < 0){
         tcpls_buffer_free(tcpls, recvbuf);
         return -1;
     }
-    fprintf(stderr, "Hanshake done\n");
+    if(verbose){
+      fprintf(stderr, "Hanshake done\n");
+    }
 
   do{
    ret = start_tunnel(tcpls, data, recvbuf);
@@ -438,6 +564,17 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
   memset(&timeout, 0, sizeof(struct timeval));
   tcpls_conn_t *conn;
   timeout.tv_sec = 100;
+
+  switch (test){
+  case T_THROUGHPUT:
+    return handle_throughput_test(tcpls, data, recvbuf);
+    break;
+  case T_LATENCY:
+    return handle_latency_test(tcpls, data, recvbuf);
+    break;
+  default:
+    break;
+  }
 
   while(1){
 
@@ -469,35 +606,38 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
           ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, conn->streamid);
           buf->off = 0;
       }
-    }
-
-    static const size_t block_size = PTLS_MAX_ENCRYPTED_RECORD_SIZE;
-    uint8_t buf[block_size];
-    conn = list_get(data->tcpls_conns, 0);
-    size_t to_send = block_size;
-    if(!fast){
-      to_send = read(io_fd, buf, block_size);
-    }
-    if(to_send < 0){
-      fprintf(stderr, "Error reading file\n");
-      return -1;
-    }
-    else if(to_send == 0){
-      fprintf(stderr, "Transfer complete \n");
-      tcpls_stream_close(conn->tcpls->tls, conn->streamid, 1);
-      return 0;
-    } else{
-      while((ret = tcpls_send(tcpls->tls, conn->streamid, buf, to_send)) == TCPLS_CON_LIMIT_REACHED){
+      if(FD_ISSET(conn->socket, &writeset) && conn->state > CLOSED){
+        static const size_t block_size = 4 * PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+        uint8_t buf[block_size];
+        conn = list_get(data->tcpls_conns, 0);
+        size_t to_send = block_size;
+        if(!fast){
+          to_send = read(io_fd, buf, block_size);
+        }
+        if(to_send < 0){
+          fprintf(stderr, "Error reading file\n");
+          return -1;
+        }
+        else if(to_send == 0){
+          if(verbose){
+            fprintf(stderr, "Transfer complete \n");
+          }
+          tcpls_stream_close(conn->tcpls->tls, conn->streamid, 1);
+          return 0;
+        } else{
+          while((ret = tcpls_send(tcpls->tls, conn->streamid, buf, to_send)) == TCPLS_CON_LIMIT_REACHED){
+          }
+          if(ret != 0){
+            fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
+                ret, conn->streamid);
+            close(io_fd);
+            return -1;
+          }
+        }
       }
-      if(ret != 0){
-        fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
-            ret, conn->streamid);
-        close(io_fd);
-        return -1;
-      }
     }
 
-
+    
   }
 
 
@@ -505,7 +645,7 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
 }
 
 
-static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_context_t *ctx,ptls_handshake_properties_t *hsprop, internal_data_t *data,const char *server_name ,const char *input_file, int fast){
+static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_context_t *ctx,ptls_handshake_properties_t *hsprop, internal_data_t *data,const char *server_name ,const char *input_file, int fast, performance_test test){
     hsprop->client.esni_keys = resolve_esni_keys(server_name);
     data->tcpls_conns = new_list(sizeof(tcpls_conn_t), 2);
     data->streamlist = new_list(sizeof(streamid_t), 2);
@@ -523,6 +663,10 @@ static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_c
     timeout.tv_sec = 5;
     timeout.tv_usec = 0;
 
+    if(test != T_NOTEST){
+      gettimeofday(&data->test_start_timer, NULL);
+    }
+
     int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
     if(err){
         fprintf(stderr, "tcpls_connect failed with err %d\n", err);
@@ -539,7 +683,7 @@ static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_c
       }
     } 
 
-    handle_tunnel_transfer(tcpls, data, io_fd, fast);
+    handle_tunnel_transfer(tcpls, data, io_fd, fast, test);
     free_data(data);
     
     return 0;
@@ -563,6 +707,7 @@ int main(int argc, char **argv){
     ptls_handshake_properties_t hsprop = {{{{NULL}}}};
 
     int ch, fast = 0;
+    performance_test test = T_NOTEST;
     const char *proxy_host, *proxy_port,*tcp_host, *tcp_port, *input_file = NULL;
 
     internal_data_t data = {NULL};
@@ -570,7 +715,7 @@ int main(int argc, char **argv){
     data.proxy_addrsV6 = new_list(40,2);
     data.proxy_addrs = new_list(16,2);
 
-    while((ch = getopt(argc, argv, "fi:p:P:")) != -1){
+    while((ch = getopt(argc, argv, "vt:fi:p:P:")) != -1){
         switch (ch){
         case 'f':{
             fast = 1;
@@ -603,6 +748,20 @@ int main(int argc, char **argv){
             addr[addrlen] = '\0';
             list_add(data.proxy_addrsV6,addr);
             break;        
+        }
+        case 't':{
+          if(strcasecmp(optarg, "throughput") == 0)
+            test = T_THROUGHPUT;
+          else if(strcasecmp(optarg, "latency") == 0)
+            test = T_LATENCY;
+          else{
+            fprintf(stderr, "Unknown test: %s\n", optarg);
+          }
+          break;
+        }
+        case 'v':{
+          verbose = 1;
+          break;
         }
         default:
             break;
@@ -655,7 +814,7 @@ int main(int argc, char **argv){
     }
 
     struct sockaddr_storage tcp_sockaddr;
-    if (resolve_address((struct sockaddr*)&tcp_sockaddr, &sa_len, tcp_host, tcp_port, AF_INET6 , SOCK_STREAM, IPPROTO_TCP) != 0){
+    if (resolve_address((struct sockaddr*)&tcp_sockaddr, &sa_len, tcp_host, tcp_port, 0 , SOCK_STREAM, IPPROTO_TCP) != 0){
         fprintf(stderr, "Failed to resolve addr: %s\n", proxy_host);        
         exit(1);
     }
@@ -663,30 +822,21 @@ int main(int argc, char **argv){
         //Convert
         struct sockaddr_in *v4 = (struct sockaddr_in *) &tcp_sockaddr;
         struct sockaddr_in6 v6;
-        char myIPString[40];
-        inet_ntop(AF_INET, &v4->sin_addr, myIPString, sizeof(myIPString));
-        printf("%s\n", myIPString);
         memset(&v6, 0, sizeof(struct sockaddr_in6));
         v6.sin6_family = AF_INET6;
         v6.sin6_port = v4->sin_port;
-        uint8_t *addr = &v6.sin6_addr.s6_addr;
+        uint8_t *addr = v6.sin6_addr.s6_addr;
         memset(addr+10, 0xff, 2);
         memcpy(addr+12, &v4->sin_addr, sizeof(struct in_addr));
-        //inet_ntop(AF_INET6, &v6.sin6_addr, myIPString, sizeof(myIPString));
-        //printf("%s\n", myIPString);
         data.peer_addr = malloc(sizeof(struct sockaddr_in6));
         memcpy(data.peer_addr, &v6, sizeof(struct sockaddr_in6));
     } else{
-        printf("v6\n");
         data.peer_addr = (struct sockaddr_in6 *) &tcp_sockaddr;
-        //data.peer_addr = malloc(sizeof(struct sockaddr_in6));
-        //memcpy(data.peer_addr, &tcp_sockaddr, sizeof(struct sockaddr_in6));
+
     }
  
     char myIPString[40];
     inet_ntop(AF_INET6, &data.peer_addr->sin6_addr, myIPString, sizeof(myIPString));
     
-    printf("%s:%hu\n", myIPString, ntohs(data.peer_addr->sin6_port));
-
-    return start_client(sockaddrs, nbr_addrs, &ctx, &hsprop, &data, proxy_host ,input_file, fast);
+    return start_client(sockaddrs, nbr_addrs, &ctx, &hsprop, &data, proxy_host ,input_file, fast, test);
 }

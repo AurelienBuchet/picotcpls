@@ -1,3 +1,7 @@
+#include <netinet/in.h>
+#include <arpa/nameser.h>
+#include <resolv.h>
+#include <netinet/tcp.h>
 
 #include <stdio.h>
 #include <netdb.h>
@@ -13,10 +17,11 @@
 
 
 int main(int argc, char **argv){
-    int listen_sock, len, sock, ch, io_fd = 0, reply = 0;
+    int listen_sock, sock, ch, io_fd = 0, reply = 0;
     char *input_file = NULL;
+    int family = AF_INET6;
 
-    while((ch = getopt(argc, argv, "rf:")) != -1){
+    while((ch = getopt(argc, argv, "rf:4")) != -1){
         switch (ch){
         case 'f':{
             input_file = optarg;
@@ -26,22 +31,55 @@ int main(int argc, char **argv){
             reply = 1;
             break;
         }
+        case '4':{
+            family = AF_INET;
+            break;
+        }
         default:
             break;
      }
     }
     argc -= optind;
     argv += optind;
-    if(argc < 1){
-        printf("Usage : port\n");
+    if(argc != 2){
+        printf("Usage : host port\n");
         return -1;
     }
-    in_port_t port = atoi((--argc, *argv++));
-    listen_sock = socket(AF_INET6, SOCK_STREAM, 0);
+    char *host =  (--argc, *argv++);
+    char *port =  (--argc, *argv++);
+    listen_sock = socket(family, SOCK_STREAM, 0);
     if(listen_sock < 0){
         perror("socket");
         return -1;
     }
+    int on = 1;
+    int qlen = 5;
+    if (setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
+        perror("setsockopt(SO_REUSEADDR) failed");
+        return 1;
+    }
+    if (setsockopt(listen_sock, SOL_TCP, TCP_FASTOPEN, &qlen, sizeof(qlen)) != 0) {
+        perror("setsockopt(TCP_FASTOPEN) failed");
+    }
+
+    struct addrinfo hints, *res;
+    struct sockaddr_storage saddr, caddr;
+    int err;
+
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = family;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV | AI_PASSIVE;
+    if ((err = getaddrinfo(host, port, &hints, &res)) != 0 || res == NULL) {
+        fprintf(stderr, "failed to resolve address:%s:%s:%s\n", host, port,
+                err != 0 ? gai_strerror(err) : "getaddrinfo returned NULL");
+        return -1;
+    }
+
+    memcpy(&saddr, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
 
     if(input_file){
         io_fd = open(input_file, O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
@@ -49,12 +87,6 @@ int main(int argc, char **argv){
             perror("open");
         }
     }
-
-
-    struct sockaddr_in6 saddr, caddr;
-    saddr.sin6_family = AF_INET6;
-    saddr.sin6_port = htons(port);
-    saddr.sin6_addr = in6addr_any;
 
     if(bind(listen_sock, (struct sockaddr *) &saddr, sizeof(saddr))){
         perror("bind");
@@ -66,7 +98,7 @@ int main(int argc, char **argv){
         return -1;
     }
     
-    len = sizeof(caddr);
+    socklen_t len = sizeof(caddr);
 
     sock = accept(listen_sock, (struct sockaddr *) &caddr, &len);
     if(sock < 0){
@@ -101,12 +133,16 @@ int main(int argc, char **argv){
             }
             received += n_rec;
             if(input_file){
-                write(io_fd, buf, n_rec);
+                ret = write(io_fd, buf, n_rec);
+                if(ret < 0){
+                    perror("write");
+                }
             }
             if(reply){
                 n_rec = write(sock, "ack", 4);
             }
         }
     }
-    printf("No more connection, received %ld bytes \n", received);
+    close(sock);
+    close(listen_sock);
 }

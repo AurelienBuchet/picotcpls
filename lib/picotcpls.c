@@ -849,7 +849,6 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
       return -1;
     int ret = get_con_info_from_addrs(tcpls, our_v4, peer_v4, NULL, NULL, &con);
     if (ret) {
-      printf("new conn v4\n");
       /** We didn't find a con with those addrs */
       memset(&newconn, 0, sizeof(connect_info_t));
       newconn.state = CONNECTED;
@@ -879,7 +878,6 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     int ret = get_con_info_from_addrs(tcpls, NULL, NULL, our_v6, peer_v6, &con);
     if (ret) {
       /** We didn't find a con with those addrs */
-      printf("new conn v6\n");
       memset(&newconn, 0, sizeof(connect_info_t));
       newconn.state = CONNECTED;
       newconn.socket = socket;
@@ -1167,7 +1165,7 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
   // }
   /** queue the message in the sending buffer */
   if (stream_send_control_message(tcpls->tls, stream->streamid, stream->sendbuf, stream->aead_enc, input, type, 4)){
-    printf("Error while closing stream %u", streamid);
+    fprintf(stderr, "Error while closing stream %u", streamid);
   }
   if (sendnow) {
     int ret;
@@ -1259,7 +1257,6 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
     tcpls->sending_stream = stream;
     stream_send_control_message(tcpls->tls, 0, stream->sendbuf,
         tls->traffic_protection.enc.aead, message, STREAM_ATTACH, message_len);
-    fprintf(stderr, "Sending stream attach as no stream exist\n");
     /** To check whether we sent it and if the stream becomes usable */
     stream->send_stream_attach_in_sendbuf_pos = stream->sendbuf->off;
     tcpls->check_stream_attach_sent = 1;
@@ -1653,8 +1650,6 @@ int tcpls_ping_tcp(tcpls_t *tcpls, int transportid){
   if(getsockopt(con->socket, IPPROTO_TCP, TCP_INFO, (void *)&our_infos, &info_length)){
     fprintf(stderr, "Failed to get tcp_infos\n");
   }
-  printf("TCP infos : \n rtt : %u, snd_cwnd : %u, lost : %u\n", 
-                          our_infos.tcpi_rtt, our_infos.tcpi_snd_cwnd, our_infos.tcpi_lost);
   uint8_t message[4 * sizeof(uint32_t)];
   transportid = htonl(transportid);
   size_t message_len = sizeof(message);
@@ -1862,7 +1857,6 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
   }
   /* finally try with the default aead */
   if (rret == PTLS_ALERT_BAD_RECORD_MAC) {
-    ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
     if (restore_buf && tcpls->buffrag->capacity)
       tcpls->buffrag->off = restore_buf;
     ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
@@ -2947,8 +2941,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
       if(getsockopt(con->socket, IPPROTO_TCP, TCP_INFO, (void *)&our_infos, &info_length)){
         fprintf(stderr, "Failed to get tcp_infos\n");
       }
-      printf("TCP infos : \n rtt : %u, snd_cwnd : %u, lost : %u", 
-                          our_infos.tcpi_rtt, our_infos.tcpi_snd_cwnd, our_infos.tcpi_lost);
+     
       uint8_t message[4*sizeof(uint32_t)];
       size_t message_len = sizeof(message);
       int offset = 0;

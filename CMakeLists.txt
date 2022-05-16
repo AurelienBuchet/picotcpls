@@ -187,6 +187,8 @@ IF (OPENSSL_FOUND AND LIBC_RESOLV_LIB)
     TARGET_LINK_LIBRARIES(proxy_client ${LIBC_RESOLV_LIB})
 ENDIF ()
 
+ADD_EXECUTABLE(tcp_simple_server t/tcp_simple_server.c)
+
 IF (BUILD_FUZZER)
     IF (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         MESSAGE(FATAL ERROR "The fuzzer needs clang as a compiler")
@@ -198,6 +200,7 @@ IF (BUILD_FUZZER)
     ADD_DEFINITIONS(-DPTLS_FUZZ_HANDSHAKE=1)
     ADD_EXECUTABLE(fuzz-server-hello fuzz/fuzz-server-hello.c)
     ADD_EXECUTABLE(fuzz-client-hello fuzz/fuzz-client-hello.c)
+
 
     IF (OSS_FUZZ)
         # Use https://github.com/google/oss-fuzz compatible options
