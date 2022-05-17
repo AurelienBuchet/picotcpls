@@ -1859,7 +1859,7 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
   if (rret == PTLS_ALERT_BAD_RECORD_MAC) {
     if (restore_buf && tcpls->buffrag->capacity)
       tcpls->buffrag->off = restore_buf;
-    ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
+    //ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
     /* That MUST be a control message */
     ptls_buffer_t deccontrolbuf;
     ptls_buffer_init(&deccontrolbuf, "", 0);
@@ -1869,7 +1869,7 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
       *input_off += consumed;
     } while (rret == 0 && *input_off < input_size);
     tcpls->buffrag->off = 0;
-    tcpls->tls->traffic_protection.dec.aead = remember_aead;
+    //tcpls->tls->traffic_protection.dec.aead = remember_aead;
   }
   return rret;
 }
@@ -3005,6 +3005,10 @@ int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
   }
   connect_info_t *con = connection_get(tcpls, tcpls->transportid_rcv);
   tcpls_stream_t *stream = stream_get(tcpls, tcpls->streamid_rcv);
+  if(!stream){
+    fprintf(stderr, "received data packet on initial stream\n");
+    return 1;
+  }
   if (tcpls->failover_recovering) {
     /**
      * We need to check whether we did not already receive this seq over the

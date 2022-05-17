@@ -32,6 +32,7 @@
 typedef enum performance_test_t{
     T_THROUGHPUT,
     T_LATENCY,
+    T_TCPLS_LATENCY,
     T_NOTEST
 } performance_test;
 
@@ -84,9 +85,13 @@ static void sig_handler(int signo) {
 static void free_data(internal_data_t *data){
   list_free(data->proxy_addrs);
   list_free(data->proxy_addrsV6);
+  tcpls_conn_t *conn;
+  for (int i = 0; i < data->tcpls_conns->size; i++){
+    conn = list_get(data->tcpls_conns, i);
+    tcpls_free(conn->tcpls);
+  }
   list_free(data->tcpls_conns);
   list_free(data->streamlist);
-  free(data->peer_addr);
 }
 
 static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
@@ -352,6 +357,7 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
       }
     }
   }
+  free(init_sizes);
   return ret;
 }
 
@@ -558,23 +564,35 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
    ret = start_tunnel(tcpls, data, recvbuf);
   } while(ret);
 
+  switch (test){
+    case T_THROUGHPUT:
+      return handle_throughput_test(tcpls, data, recvbuf);
+      break;
+    case T_LATENCY:
+      return handle_latency_test(tcpls, data, recvbuf);
+      break;
+    case T_TCPLS_LATENCY:{
+      struct timeval now;
+      gettimeofday(&now, NULL);
+      time_t sec = now.tv_sec - data->test_start_timer.tv_sec;
+      suseconds_t usec = now.tv_usec - data->test_start_timer.tv_usec;
+      if(usec < 0){
+        usec += 1000000;
+        sec -= 1;
+      }
+      printf("latency : %ld.%06ld\n", sec,usec);
+      return 0;
+    }
+    default:
+      break;
+  }
+
   fd_set readset, writeset;
   int maxfd = 0;
   struct timeval timeout;
   memset(&timeout, 0, sizeof(struct timeval));
   tcpls_conn_t *conn;
   timeout.tv_sec = 100;
-
-  switch (test){
-  case T_THROUGHPUT:
-    return handle_throughput_test(tcpls, data, recvbuf);
-    break;
-  case T_LATENCY:
-    return handle_latency_test(tcpls, data, recvbuf);
-    break;
-  default:
-    break;
-  }
 
   while(1){
 
@@ -754,6 +772,8 @@ int main(int argc, char **argv){
             test = T_THROUGHPUT;
           else if(strcasecmp(optarg, "latency") == 0)
             test = T_LATENCY;
+          else if(strcasecmp(optarg, "tcpls_latency") == 0)
+            test = T_TCPLS_LATENCY;
           else{
             fprintf(stderr, "Unknown test: %s\n", optarg);
           }

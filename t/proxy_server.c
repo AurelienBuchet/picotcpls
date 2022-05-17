@@ -715,7 +715,7 @@ int main(int argc, char **argv){
         }
     }
     if(ctx.certificates.count == 0){
-        fprintf(stderr, "Plese provide a certificate and a key\n");
+        fprintf(stderr, "Please provide a certificate and a key\n");
     }
     setup_session_cache(&ctx);
     if (key_exchanges[0] == NULL)

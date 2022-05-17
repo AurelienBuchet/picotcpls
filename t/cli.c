@@ -85,7 +85,8 @@ typedef enum integration_test_t {
   T_AGGREGATION_TIME, /* same as aggregation, but timing to add a stream is controled by a timer rather than a number of bytes */
   T_MULTIPLEXING,
   T_RTT,
-  T_NAT
+  T_NAT,
+  T_LATENCY
 } integration_test_t;
 
 struct tcpls_options {
@@ -217,7 +218,7 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
       list_add(data->streamlist, &streamid);
       break;
     case STREAM_OPENED:
-      fprintf(stderr, "Handling STREAM_OPENED callback\n");
+      fprintf(stderr, "Handling STREAM_OPENED callback stream %u is now opened\n", streamid);
       list_add(data->streamlist, &streamid);
       break;
     case STREAM_NETWORK_FAILURE:
@@ -654,7 +655,7 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
 static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,  int *inputfd) {
   static const size_t block_size = 4*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
   uint8_t buf[block_size];
-  int ret, ioret;
+  int ret, ioret = 0;
   if (*inputfd > 0)
     while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
       ;
@@ -699,20 +700,20 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
     conntotcpls = list_get(conn_tcpls, i);
     tcpls = conntotcpls->tcpls;
     if (FD_ISSET(conntotcpls->conn_fd, writeset) && conntotcpls->wants_to_write && scheduler == S_ROUNDROBIN) {
-      int ret, ioret;
+      int ret, ioret = 0;
       if (*inputfd > 0)
         while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
           ;
       if (ioret > 0) {
-        //printf("Sending to connection %d ; stream %u \n", i, conntotcpls->streamid);
+        printf("Sending to connection %d ; stream %u \n", i, conntotcpls->streamid);
         while((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) == TCPLS_CON_LIMIT_REACHED){
 
         }
         if(ret != 0) {
           fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
               ret, conntotcpls->streamid);
-          close(inputfd);
-          inputfd = -1;
+          close(*inputfd);
+          *inputfd = -1;
           return -1;
         }
         if (ret == TCPLS_HOLD_DATA_TO_SEND) {
@@ -930,7 +931,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   //if(test == T_MULTIPLEXING){
     //recvbuf = tcpls_stream_buffers_new(tcpls, max_streams);
   //} else{
-    recvbuf = tcpls_aggr_buffer_new(tcpls);
+  recvbuf = tcpls_aggr_buffer_new(tcpls);
   //}
   //FILE *mtest = fopen("Files/multipath_test.data", "w");
   //assert(mtest);
@@ -1155,7 +1156,6 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     if(test == T_MULTIPLEXING && n_streams < max_streams) {
         streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*) &tcpls->v4_addr_llist->addr);
         list_add(data->streamlist, &streamid);
-        ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, streamid); 
         struct timeval now;
         struct tm *tm;
         gettimeofday(&now, NULL);
@@ -1206,7 +1206,7 @@ static int handle_client_nat_test(tcpls_t *tcpls, struct cli_data *data) {
   struct timeval timeout;
   timeout.tv_sec = 5;
   timeout.tv_usec = 0;
-  struct timeval t_init, t_now;
+  struct timeval t_init;
   gettimeofday(&t_init, NULL);
   int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
   if (err){
@@ -1256,10 +1256,6 @@ static int handle_client_nat_test(tcpls_t *tcpls, struct cli_data *data) {
       }
     }
   }
-
-
-  sleep(2);
-
   return ret;
 }
 
@@ -1280,8 +1276,66 @@ static int handle_client_zero_rtt_test(tcpls_t *tcpls, struct cli_data *data) {
   return ret;
 }
 
-static int handle_client_ping_test(tcpls_t *tcpls,integration_test_t test, struct cli_data *data){
+static int handle_client_latency_test(tcpls_t *tcpls, struct cli_data *data){
+  int ret = 0;
+  struct timeval timeout;
+  timeout.tv_sec = 5;
+  timeout.tv_usec = 0;
+  struct timeval t_init, t_end;
+  gettimeofday(&t_init, NULL);
+  int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
+  if (err){
+    fprintf(stderr, "tcpls_connect failed with err %d\n", err);
+    return 1;
+  }
+  tcpls_buffer_t *recvbuf = tcpls_stream_buffers_new(tcpls, 1);
+  if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
+    ret = -1;
+  }
 
+  fd_set readset, writeset;
+  int maxfd = 0;
+  int *sock;
+  while(1){
+    FD_ZERO(&readset);
+    FD_ZERO(&writeset);
+    for (int i = 0; i < data->socklist->size; i++) {
+        sock = list_get(data->socklist, i);
+        FD_SET(*sock , &readset);
+        if (maxfd < *sock)
+          maxfd = *sock;
+    }
+    select(maxfd+1, &readset, &writeset, NULL, &timeout);
+    for(int i = 0 ; i < data->socklist->size ; i++){
+      sock = list_get(data->socklist, i);
+      if(FD_ISSET(*sock, &readset)){
+          int ret = handle_tcpls_read(tcpls, *sock, recvbuf, data->streamlist, NULL);
+          if(ret < 0){
+            fprintf(stderr, "tcpls read return %d\n", ret);
+          }
+          ptls_buffer_t *buf;
+          streamid_t *streamid;
+          for (int i = 0; i < recvbuf->wtr_streams->size; i++) {
+            streamid = list_get(recvbuf->wtr_streams, i);
+            buf = tcpls_get_stream_buffer(recvbuf, *streamid);
+            if(buf->off > 0){
+              gettimeofday(&t_end, NULL);
+              time_t sec = t_end.tv_sec - t_init.tv_sec;
+              suseconds_t usec = t_end.tv_usec - t_init.tv_usec;
+              if(usec < 0){
+                usec += 1000000;
+                sec -= 1;
+              }
+              printf("latency : %ld.%06ld\n", sec,usec);
+              buf->off = 0;
+              return 0;
+            }
+          }
+
+      }
+    }
+  }
+  return ret;
 }
 
 static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
@@ -1308,6 +1362,13 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
         printf("TEST NAT: SUCCESS\n");
       else
         printf("TEST NAT: FAILURE\n");
+      break;
+    case T_LATENCY:
+      ret = handle_client_latency_test(tcpls, data);
+      if(!ret)
+        printf("TEST LATENCY: SUCCESS\n");
+      else
+        printf("TEST LATENCY: FAILURE\n");
       break;
     case T_MULTIPLEXING:
     case T_SIMPLE_TRANSFER:
@@ -1351,8 +1412,10 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
         break;
       }
     case T_NOTEST:
-      printf("NO TEST");
+      fprintf(stderr, "NO TEST\n");
       exit(1);
+    default :
+      fprintf(stderr, "Not implemented\n");
   }
   return 0;
 }
@@ -1450,8 +1513,12 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
           } else if (ret == PTLS_ERROR_IN_PROGRESS) {
             /* ok */
           } else {
-            if (encbuf.off != 0)
-              (void)write(sockfd, encbuf.base, encbuf.off);
+            if (encbuf.off != 0){              
+              int ret = write(sockfd, encbuf.base, encbuf.off);
+              if(ret < 0){
+                perror("write");
+              }
+            }
             fprintf(stderr, "ptls_handshake:%d\n", ret);
             goto Exit;
           }
@@ -1459,8 +1526,12 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
           if ((ret = ptls_receive(tls, &rbuf, NULL, bytebuf + off, &leftlen)) == 0) {
             if (rbuf.off != 0) {
               data_received += rbuf.off;
-              if (input_file != input_file_is_benchmark)
-                write(1, rbuf.base, rbuf.off);
+              if (input_file != input_file_is_benchmark){
+                int ret = write(1, rbuf.base, rbuf.off);
+                if(ret < 0){
+                  perror("write");
+                }
+              }
               rbuf.off = 0;
             }
           } else if (ret == PTLS_ERROR_IN_PROGRESS) {
@@ -1547,8 +1618,12 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
         if ((ret = ptls_send_alert(tls, &wbuf, PTLS_ALERT_LEVEL_WARNING, PTLS_ALERT_CLOSE_NOTIFY)) != 0) {
           fprintf(stderr, "ptls_send_alert:%d\n", ret);
         }
-        if (wbuf.off != 0)
-          (void)write(sockfd, wbuf.base, wbuf.off);
+        if (wbuf.off != 0){
+          int ret = write(sockfd, wbuf.base, wbuf.off);
+          if(ret < 0){
+            perror("write");
+          }
+        }
         ptls_buffer_dispose(&wbuf);
         shutdown(sockfd, SHUT_WR);
       }
@@ -1767,6 +1842,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           }
           break;
         case T_NOTEST:
+          exit(0);
+        default:
           exit(0);
       }
     }
@@ -2073,6 +2150,8 @@ int main(int argc, char **argv)
                   test = T_MULTIPLEXING;
                 else if (strcasecmp(optarg, "nat") == 0)
                   test = T_NAT;
+                else if (strcasecmp(optarg, "latency") == 0)
+                  test = T_LATENCY;
                 else {
                   fprintf(stderr, "Unknown integration test: %s\n", optarg);
                   exit(1);
