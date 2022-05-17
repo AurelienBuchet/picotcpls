@@ -2,6 +2,7 @@
 #include <arpa/nameser.h>
 #include <resolv.h>
 #include <netinet/tcp.h>
+#include <sys/time.h>
 
 #include <stdio.h>
 #include <netdb.h>
@@ -15,25 +16,64 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+typedef enum performance_test_t{
+    T_THROUGHPUT,
+    T_LATENCY,
+    T_NOTEST
+} performance_test;
+
+static int handle_latency_test(int sock, struct timeval old){
+    fd_set readset;
+    int maxfd = sock;
+    struct timeval timeout;
+    memset(&timeout, 0, sizeof(struct timeval));
+    static const size_t block_size = 16384 + 256;
+    uint8_t buf[block_size];
+    while (1){
+        timeout.tv_sec = 10;
+        FD_ZERO(&readset);
+        FD_SET(sock , &readset);
+        select(maxfd+1, &readset, NULL, NULL, &timeout);
+        if(FD_ISSET(sock, &readset)){
+            int n_rec = read(sock, buf, block_size );
+            if(n_rec > 0){
+                struct timeval now;
+                gettimeofday(&now, NULL);
+                time_t sec = now.tv_sec - old.tv_sec;
+                suseconds_t usec = now.tv_usec - old.tv_usec;
+                if(usec < 0){
+                usec += 1000000;
+                sec -= 1;
+                }
+                printf("latency : %ld.%06ld\n", sec,usec);
+                close(sock);
+                return 0;
+            }
+        }
+    }
+}
 
 int main(int argc, char **argv){
-    int listen_sock, sock, ch, io_fd = 0, reply = 0;
-    char *input_file = NULL;
+    int sock, ch;
     int family = AF_INET6;
+    performance_test test = T_NOTEST;
+    struct timeval test_start_timer;
 
-    while((ch = getopt(argc, argv, "rf:4")) != -1){
+    while((ch = getopt(argc, argv, "t:4")) != -1){
         switch (ch){
-        case 'f':{
-            input_file = optarg;
-            break;
-        }
-        case 'r':{
-            reply = 1;
-            break;
-        }
         case '4':{
             family = AF_INET;
             break;
+        }
+        case 't':{
+          if(strcasecmp(optarg, "throughput") == 0)
+            test = T_THROUGHPUT;
+          else if(strcasecmp(optarg, "latency") == 0)
+            test = T_LATENCY;
+          else{
+            fprintf(stderr, "Unknown test: %s\n", optarg);
+          }
+          break;
         }
         default:
             break;
@@ -47,23 +87,19 @@ int main(int argc, char **argv){
     }
     char *host =  (--argc, *argv++);
     char *port =  (--argc, *argv++);
-    listen_sock = socket(family, SOCK_STREAM, 0);
-    if(listen_sock < 0){
+    sock = socket(family, SOCK_STREAM, 0);
+    if(sock < 0){
         perror("socket");
         return -1;
     }
     int on = 1;
-    int qlen = 5;
-    if (setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
         perror("setsockopt(SO_REUSEADDR) failed");
         return 1;
     }
-    if (setsockopt(listen_sock, SOL_TCP, TCP_FASTOPEN, &qlen, sizeof(qlen)) != 0) {
-        perror("setsockopt(TCP_FASTOPEN) failed");
-    }
 
     struct addrinfo hints, *res;
-    struct sockaddr_storage saddr, caddr;
+    struct sockaddr_storage saddr;
     int err;
 
 
@@ -81,39 +117,32 @@ int main(int argc, char **argv){
     memcpy(&saddr, res->ai_addr, res->ai_addrlen);
     freeaddrinfo(res);
 
-    if(input_file){
-        io_fd = open(input_file, O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
-        if(io_fd < 0){
-            perror("open");
+    if(connect(sock, (struct sockaddr *) &saddr, sizeof(saddr))){
+        perror("connect");
+        return -1;
+    }
+
+    switch(test){
+        case T_LATENCY:{
+            gettimeofday(&test_start_timer, NULL);
+            return handle_latency_test(sock, test_start_timer);
+            break;
+        }
+        case T_THROUGHPUT:{
+            break;
+        }
+        case T_NOTEST:{
+            break;
         }
     }
-
-    if(bind(listen_sock, (struct sockaddr *) &saddr, sizeof(saddr))){
-        perror("bind");
-        return -1;
-    }
-
-    if(listen(listen_sock, 5)){
-        perror("listen");
-        return -1;
-    }
     
-    socklen_t len = sizeof(caddr);
-
-    sock = accept(listen_sock, (struct sockaddr *) &caddr, &len);
-    if(sock < 0){
-        perror("accept");
-        return -1;
-    }
-
     char *hello = "hello";
     int ret = write(sock, hello, 6);
     if(ret < 0){
         perror("write");
         return -1;
     }
-    printf("hello\n");
-    
+      
     fd_set readset, writeset;
     int maxfd = sock;
     struct timeval timeout;
@@ -133,17 +162,7 @@ int main(int argc, char **argv){
                 break;
             }
             received += n_rec;
-            if(input_file){
-                ret = write(io_fd, buf, n_rec);
-                if(ret < 0){
-                    perror("write");
-                }
-            }
-            if(reply){
-                n_rec = write(sock, "ack", 4);
-            }
         }
     }
     close(sock);
-    close(listen_sock);
 }

@@ -188,6 +188,7 @@ IF (OPENSSL_FOUND AND LIBC_RESOLV_LIB)
 ENDIF ()
 
 ADD_EXECUTABLE(tcp_simple_server t/tcp_simple_server.c)
+ADD_EXECUTABLE(tcp_simple_client t/tcp_simple_client.c)
 
 IF (BUILD_FUZZER)
     IF (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
