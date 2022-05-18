@@ -27,12 +27,13 @@
 #include "picotls.h"
 #include "picotls/openssl.h"
 #include "containers.h"
-#include "util.h"
+#include "../util.h"
 
 typedef enum performance_test_t{
-    T_THROUGHPUT,
+    T_GOODPUT,
     T_LATENCY,
     T_TCPLS_LATENCY,
+    T_REQUESTS,
     T_NOTEST
 } performance_test;
 
@@ -266,6 +267,11 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
     ptls_handshake_properties_t prop = {NULL};
     memset(&prop, 0, sizeof(prop));
     prop.socket = socket;
+    prop.client.zero_rtt = 1;
+    if (tcpls->v4_addr_llist)
+      prop.client.dest = (struct sockaddr_storage *) &tcpls->v4_addr_llist->addr;
+    else
+      prop.client.dest = (struct sockaddr_storage *) &tcpls->v6_addr_llist->addr;
     if (tcpls->enable_failover && tcpls->tls->is_server) {
       tcpls_set_user_timeout(tcpls, 0, 250, 0, 1, 1);
     }
@@ -274,6 +280,7 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
         return ret;
       }
       fprintf(stderr, "tcpls_handshake failed with ret %d\n", ret);
+      return ret;
     }
     else if (ret == 0 && tcpls->tls->is_server) {
       // set this conn as primary
@@ -398,6 +405,10 @@ static int start_tunnel(tcpls_t *tcpls,internal_data_t *data, tcpls_buffer_t *re
         conn = list_get(data->tcpls_conns, i);
         if(FD_ISSET(conn->socket, &readset) && conn->state > CLOSED ){
             ret = handle_tcpls_read(conn->tcpls, conn->socket, recvbuf, data->streamlist, data->tcpls_conns);
+            if(ret < 0){
+              fprintf(stderr, "Failed to open tunnel\n");
+              return -2;
+            }
         }
     }
     return -1;
@@ -498,14 +509,14 @@ static int handle_latency_test(tcpls_t * tcpls, internal_data_t *data, tcpls_buf
   }
 }
 
-static int handle_throughput_test(tcpls_t * tcpls, internal_data_t *data, tcpls_buffer_t * recvbuf){
+static int handle_goodput_test(tcpls_t * tcpls, internal_data_t *data, tcpls_buffer_t * recvbuf){
   fd_set readset, writeset;
   int maxfd = 0;
   struct timeval timeout;
   memset(&timeout, 0, sizeof(struct timeval));
   tcpls_conn_t *conn;
   timeout.tv_sec = 100;
-  long total_sent = 0;
+  long total_received = 0;
   int ret;
   while(1){
     FD_ZERO(&readset);
@@ -524,25 +535,76 @@ static int handle_throughput_test(tcpls_t * tcpls, internal_data_t *data, tcpls_
           ret = handle_tcpls_read(conn->tcpls, conn->socket, recvbuf, data->streamlist, data->tcpls_conns);
           ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, conn->streamid);
           if(buf->off > 0){
+            total_received += buf->off;
             buf->off = 0; // ignore received data
           }
       }      
-      if(FD_ISSET(conn->socket, &writeset) && conn->state > CLOSED){
-        static const size_t block_size = 4 * PTLS_MAX_ENCRYPTED_RECORD_SIZE;
-        uint8_t buf[block_size];
-        conn = list_get(data->tcpls_conns, 0);
-        size_t to_send = block_size;
-        while((ret = tcpls_send(tcpls->tls, conn->streamid, buf, to_send)) == TCPLS_CON_LIMIT_REACHED){
-        }
-        if(ret != 0){
-          fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
-              ret, conn->streamid);
-          return -1;
-        }
-        total_sent += to_send;
-      }
     }
-    if(total_sent >= 10000000000){
+    if(total_received >= 10000000000){
+      struct timeval now;
+      gettimeofday(&now, NULL);
+      time_t sec = now.tv_sec - data->test_start_timer.tv_sec;
+      suseconds_t usec = now.tv_usec - data->test_start_timer.tv_usec;
+      if(usec < 0){
+        usec += 1000000;
+        sec -= 1;
+      }
+      printf("goodput :%ld bytes %ld.%06ld sec \n",total_received, sec,usec);
+      return 0;
+    }
+  }
+}
+
+static int handle_requests_test(tcpls_t * tcpls, internal_data_t *data, tcpls_buffer_t * recvbuf){
+  fd_set readset, writeset;
+  int maxfd = 0;
+  struct timeval timeout;
+  memset(&timeout, 0, sizeof(struct timeval));
+  tcpls_conn_t *conn;
+  timeout.tv_sec = 100;
+  long total_requests = 0;
+  int acked = 1;
+  int ret;
+  while(1){
+    FD_ZERO(&readset);
+    FD_ZERO(&writeset);
+    for (int i = 0; i < data->tcpls_conns->size; i++) {
+        conn = list_get(data->tcpls_conns, i);
+        FD_SET(conn->socket , &readset);
+        FD_SET(conn->socket , &writeset);
+        if (maxfd < conn->socket)
+          maxfd = conn->socket;
+    }
+    select(maxfd+1, &readset, &writeset, NULL, &timeout);
+    for(int i = 0 ; i < data->tcpls_conns->size ; i++){
+      conn = list_get(data->tcpls_conns, i);
+      if(FD_ISSET(conn->socket, &writeset) && conn->state > CLOSED && acked){
+        ret = tcpls_send(tcpls->tls, conn->streamid, "req", 4);
+        if(ret < 0){
+          perror("tcpls send");
+        }
+        acked = 0;
+      }
+      if(FD_ISSET(conn->socket, &readset) && conn->state > CLOSED ){
+          ret = handle_tcpls_read(conn->tcpls, conn->socket, recvbuf, data->streamlist, data->tcpls_conns);
+          ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, conn->streamid);
+          if(buf->off > 0){
+            total_requests += 1;
+            acked = 1;
+            buf->off = 0; // ignore received data
+          }
+      }      
+    }
+    if(total_requests >= 100000){
+      struct timeval now;
+      gettimeofday(&now, NULL);
+      time_t sec = now.tv_sec - data->test_start_timer.tv_sec;
+      suseconds_t usec = now.tv_usec - data->test_start_timer.tv_usec;
+      if(usec < 0){
+        usec += 1000000;
+        sec -= 1;
+      }
+      printf("requests :%ld %ld.%06ld sec \n",total_requests, sec,usec);
       return 0;
     }
   }
@@ -562,14 +624,17 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
 
   do{
    ret = start_tunnel(tcpls, data, recvbuf);
-  } while(ret);
+  } while(ret == -1);
 
   switch (test){
-    case T_THROUGHPUT:
-      return handle_throughput_test(tcpls, data, recvbuf);
+    case T_GOODPUT:
+      return handle_goodput_test(tcpls, data, recvbuf);
       break;
     case T_LATENCY:
       return handle_latency_test(tcpls, data, recvbuf);
+      break;
+    case T_REQUESTS:
+      return (handle_requests_test(tcpls, data, recvbuf));
       break;
     case T_TCPLS_LATENCY:{
       struct timeval now;
@@ -677,19 +742,11 @@ static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_c
     tcpls_add_ips(tcpls, NULL, (struct sockaddr_storage *) sockaddrs, 0, nb_addrs);
     ctx->output_decrypted_tcpls_data = 0;
     signal(SIGPIPE, sig_handler);
-    struct timeval timeout;
-    timeout.tv_sec = 5;
-    timeout.tv_usec = 0;
 
     if(test != T_NOTEST){
       gettimeofday(&data->test_start_timer, NULL);
     }
 
-    int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
-    if(err){
-        fprintf(stderr, "tcpls_connect failed with err %d\n", err);
-        return 1;
-    }
     tcpls->enable_multipath = 1;
 
     int io_fd = 0;
@@ -768,12 +825,14 @@ int main(int argc, char **argv){
             break;        
         }
         case 't':{
-          if(strcasecmp(optarg, "throughput") == 0)
-            test = T_THROUGHPUT;
+          if(strcasecmp(optarg, "goodput") == 0)
+            test = T_GOODPUT;
           else if(strcasecmp(optarg, "latency") == 0)
             test = T_LATENCY;
           else if(strcasecmp(optarg, "tcpls_latency") == 0)
             test = T_TCPLS_LATENCY;
+          else if(strcasecmp(optarg, "requests") == 0)
+            test = T_REQUESTS;
           else{
             fprintf(stderr, "Unknown test: %s\n", optarg);
           }

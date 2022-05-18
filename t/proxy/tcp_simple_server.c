@@ -17,18 +17,26 @@
 
 
 int main(int argc, char **argv){
-    int listen_sock, sock, ch, io_fd = 0, reply = 0;
+    int listen_sock, sock, ch, io_fd = 0, reply = 0, send = 0, hello = 0;
     char *input_file = NULL;
     int family = AF_INET6;
 
-    while((ch = getopt(argc, argv, "rf:4")) != -1){
+    while((ch = getopt(argc, argv, "hsrf:4")) != -1){
         switch (ch){
         case 'f':{
             input_file = optarg;
             break;
+        }        
+        case 'h':{
+            hello = 1;
+            break;
         }
         case 'r':{
             reply = 1;
+            break;
+        }
+        case 's':{
+            send = 1;
             break;
         }
         case '4':{
@@ -105,27 +113,32 @@ int main(int argc, char **argv){
         perror("accept");
         return -1;
     }
+    int ret;
 
-    char *hello = "hello";
-    int ret = write(sock, hello, 6);
-    if(ret < 0){
-        perror("write");
-        return -1;
+    if(hello){
+        char *str = "hello";
+        ret = write(sock, str, 6);
+        if(ret < 0){
+            perror("write");
+            return -1;
+        }
     }
-    printf("hello\n");
+
     
     fd_set readset, writeset;
     int maxfd = sock;
     struct timeval timeout;
     memset(&timeout, 0, sizeof(struct timeval));
-    static const size_t block_size = 16384 + 256;
+    static const size_t block_size = 4 * (16384 + 256);
     uint8_t buf[block_size];
     long received = 0;
+    ret = 1;
     while (ret > 0){
         timeout.tv_sec = 10;
         FD_ZERO(&readset);
         FD_ZERO(&writeset);
         FD_SET(sock , &readset);
+        FD_SET(sock, &writeset);
         ret = select(maxfd+1, &readset, &writeset, NULL, &timeout);
         if(FD_ISSET(sock, &readset)){
             int n_rec = read(sock, buf, block_size );
@@ -141,6 +154,12 @@ int main(int argc, char **argv){
             }
             if(reply){
                 n_rec = write(sock, "ack", 4);
+            }
+        }
+        if(FD_ISSET(sock, &writeset) && send){
+            ret = write(sock, buf, block_size);
+            if(ret < 0){
+                perror("send");
             }
         }
     }

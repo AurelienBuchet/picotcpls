@@ -17,8 +17,9 @@
 #include <fcntl.h>
 
 typedef enum performance_test_t{
-    T_THROUGHPUT,
+    T_GOODPUT,
     T_LATENCY,
+    T_REQUESTS,
     T_NOTEST
 } performance_test;
 
@@ -53,6 +54,91 @@ static int handle_latency_test(int sock, struct timeval old){
     }
 }
 
+static int handle_goodput_test(int sock, struct timeval old){
+    fd_set readset;
+    int maxfd = sock;
+    struct timeval timeout;
+    memset(&timeout, 0, sizeof(struct timeval));
+    static const size_t block_size = 4 *(16384 + 256);
+    uint8_t buf[block_size];
+    long total_received = 0;
+    while (1){
+        timeout.tv_sec = 10;
+        FD_ZERO(&readset);
+        FD_SET(sock , &readset);
+        select(maxfd+1, &readset, NULL, NULL, &timeout);
+        if(FD_ISSET(sock, &readset)){
+            int n_rec = read(sock, buf, block_size );
+            if(n_rec < 0){
+                perror("received failed");
+            }
+            total_received += n_rec;
+            if(total_received >= 10000000000){
+                struct timeval now;
+                gettimeofday(&now, NULL);
+                time_t sec = now.tv_sec - old.tv_sec;
+                suseconds_t usec = now.tv_usec - old.tv_usec;
+                if(usec < 0){
+                usec += 1000000;
+                sec -= 1;
+                }
+                printf("goodput :%ld bytes %ld.%06ld sec \n", total_received,sec,usec);
+                close(sock);
+                return 0;
+            }
+        }
+    }
+}
+
+static int handle_requests_test(int sock, struct timeval old){
+    fd_set readset, writeset;
+    int maxfd = sock;
+    struct timeval timeout;
+    memset(&timeout, 0, sizeof(struct timeval));
+    static const size_t block_size = 4;
+    uint8_t buf[block_size];
+    long total_requests = 0;
+    int acked = 1;
+    int ret;
+    while (1){
+        timeout.tv_sec = 1;
+        FD_ZERO(&readset);
+        FD_SET(sock , &readset);
+        FD_SET(sock , &writeset);
+        ret = select(maxfd+1, &readset, &writeset, NULL, &timeout);
+        if(acked){
+            int ret = write(sock, "req", 4);
+            acked = 0;
+            if(ret < 0){
+                perror("send");
+            }
+        }
+        if(FD_ISSET(sock, &readset)){
+            int n_rec = read(sock, buf, block_size );
+            if(n_rec < 0){
+                perror("received failed");
+            }
+            if(n_rec > 0){
+                total_requests += 1;
+                acked = 1;
+            }
+        }
+        if(total_requests >= 100000){
+            struct timeval now;
+            gettimeofday(&now, NULL);
+            time_t sec = now.tv_sec - old.tv_sec;
+            suseconds_t usec = now.tv_usec - old.tv_usec;
+            if(usec < 0){
+            usec += 1000000;
+            sec -= 1;
+            }
+            printf("requests :%ld %ld.%06ld sec \n", total_requests,sec,usec);
+            close(sock);
+            return 0;
+        }
+    }
+}
+
 int main(int argc, char **argv){
     int sock, ch;
     int family = AF_INET6;
@@ -66,10 +152,12 @@ int main(int argc, char **argv){
             break;
         }
         case 't':{
-          if(strcasecmp(optarg, "throughput") == 0)
-            test = T_THROUGHPUT;
+          if(strcasecmp(optarg, "goodput") == 0)
+            test = T_GOODPUT;
           else if(strcasecmp(optarg, "latency") == 0)
             test = T_LATENCY;
+          else if(strcasecmp(optarg, "requests") == 0)
+            test = T_REQUESTS;            
           else{
             fprintf(stderr, "Unknown test: %s\n", optarg);
           }
@@ -128,7 +216,14 @@ int main(int argc, char **argv){
             return handle_latency_test(sock, test_start_timer);
             break;
         }
-        case T_THROUGHPUT:{
+        case T_GOODPUT:{
+            gettimeofday(&test_start_timer, NULL);
+            return handle_goodput_test(sock, test_start_timer);
+            break;
+        }
+        case T_REQUESTS:{
+            gettimeofday(&test_start_timer, NULL);
+            return handle_requests_test(sock, test_start_timer);
             break;
         }
         case T_NOTEST:{
@@ -136,13 +231,7 @@ int main(int argc, char **argv){
         }
     }
     
-    char *hello = "hello";
-    int ret = write(sock, hello, 6);
-    if(ret < 0){
-        perror("write");
-        return -1;
-    }
-      
+    int ret = 1;
     fd_set readset, writeset;
     int maxfd = sock;
     struct timeval timeout;

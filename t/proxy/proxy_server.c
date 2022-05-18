@@ -33,7 +33,14 @@
 #if PICOTLS_USE_BROTLI
 #include "picotls/certificate_compression.h"
 #endif
-#include "util.h"
+#include "../util.h"
+
+
+typedef enum performance_test_t{
+  T_GOODPUT,
+  T_REQUESTS,
+  T_NOTEST
+} performance_test;
 
 typedef enum tunnel_message_type_t {
     TCP_CONNECT,
@@ -455,7 +462,7 @@ static int handle_tcp_read(internal_data_t *data, tcp_conn_t *conn_tcp){
     return 0;
 }
 
-static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *writeset){
+static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *writeset, performance_test test){
     int ret = 1;
     
     tcpls_conn_t *conn;
@@ -495,10 +502,19 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
                         buf->off = 0;
                     }
                 } else if(conn->state == PROXY_OPENED){
-                    ret = handle_tcp_forward(data, conn->tcp, buf->base, buf->off);
-                    buf->off = 0;
+                    if(test == T_NOTEST){
+                      ret = handle_tcp_forward(data, conn->tcp, buf->base, buf->off);
+                      buf->off = 0;
+                    } else if(test == T_REQUESTS){
+                      ret = tcpls_send(conn->tcpls->tls, conn->streamid, "ack", 4);
+                    }
                 }
             }
+        }
+        if(test == T_GOODPUT && FD_ISSET(conn->socket, writeset) && conn->state == PROXY_OPENED){
+          static const size_t block_size = 4 * PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+          uint8_t buf[block_size];
+          ret = tcpls_send(conn->tcpls->tls, conn->streamid, buf, block_size);
         }
     }
 
@@ -513,7 +529,7 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
     return ret;
 }
 
-static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, ptls_context_t *ctx, ptls_handshake_properties_t *hsprop, internal_data_t *data){
+static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, ptls_context_t *ctx, ptls_handshake_properties_t *hsprop, internal_data_t *data, performance_test test){
     int listen_socks[nbr_addr];
     data->tcpls_conns = new_list(sizeof(tcpls_conn_t), 2);
     data->tcp_conns = new_list(sizeof(tcp_conn_t), 2);
@@ -580,11 +596,12 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
                 if (maxfd < listen_socks[i])
                     maxfd = listen_socks[i];
             }
-            /** put all tcp connections within the read set*/
+            /** put all tcp connections within the read set and the write set*/
             for (int i = 0; i < data->tcp_conns->size ; i++){
                 proxy_conn = list_get(data->tcp_conns, i);
                 //printf("adding socket %d to readset\n", proxy_conn->socket);
                 FD_SET(proxy_conn->socket, &readset);
+                FD_SET(proxy_conn->socket, &writeset);
                 if (maxfd < proxy_conn->socket)
                     maxfd = proxy_conn->socket;
             }
@@ -599,6 +616,7 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
                 }
                 if (conn->state > CLOSED) {
                     FD_SET(conn->socket , &readset);
+                    FD_SET(conn->socket , &writeset);
                     if (maxfd < conn->socket)
                     maxfd = conn->socket;
                 }
@@ -636,7 +654,7 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
            }
         }
         //Handle data 
-        if(handle_proxy_server(data, &readset, &writeset) < 0){
+        if(handle_proxy_server(data, &readset, &writeset, test) < 0){
             //goto Exit;
         }
     }
@@ -658,6 +676,7 @@ int main(int argc, char **argv){
     ptls_cipher_suite_t *cipher_suites[128] = {NULL};
     ptls_context_t ctx = {ptls_openssl_random_bytes, &ptls_get_time, key_exchanges, cipher_suites};
     ptls_handshake_properties_t hsprop = {{{{NULL}}}};
+    performance_test test = T_NOTEST;
 
     int ch;
     char *host, *port;
@@ -667,7 +686,7 @@ int main(int argc, char **argv){
     data.our_addrs = new_list(16, 2);
                 
 
-    while ((ch = getopt(argc, argv, "c:k:z:Z:v")) != -1){
+    while ((ch = getopt(argc, argv, "t:c:k:z:Z:v")) != -1){
         switch(ch){
             case 'c':{
                 if (ctx.certificates.count != 0) {
@@ -707,6 +726,16 @@ int main(int argc, char **argv){
             }
             case 'v':{
               verbose = 1;
+              break;
+            }
+            case 't':{
+              if(strcasecmp(optarg, "goodput") == 0)
+                test = T_GOODPUT;  
+              else if(strcasecmp(optarg, "requests") == 0)
+                test= T_REQUESTS;      
+              else{
+                fprintf(stderr, "Unknown test: %s\n", optarg);
+              }
               break;
             }
             default:{
@@ -761,5 +790,5 @@ int main(int argc, char **argv){
         exit(1);
     }
 
-    return start_server(ours_sockaddr, nbr_addrs, &ctx, &hsprop, &data);
+    return start_server(ours_sockaddr, nbr_addrs, &ctx, &hsprop, &data, test);
 }
