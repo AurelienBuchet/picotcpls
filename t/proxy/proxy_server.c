@@ -46,10 +46,8 @@ typedef enum tunnel_message_type_t {
     TCP_CONNECT,
     TCP_CONNECT_OK,
     ERROR,
-    END,
-    
-    enum_sentinel = 255UL
-} tunnel_message_type;
+    END = 0xff,
+    } tunnel_message_type;
 
 typedef enum tcpls_conn_state_t{
     PROXY_CLOSED,

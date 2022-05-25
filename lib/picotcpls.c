@@ -2852,7 +2852,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             ptls->tcpls->sending_con = con; 
 
             stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-                ptls->traffic_protection.enc.aead, message, PONG_NAT,
+                ptls->traffic_protection.enc.aead, message, NAT_REPLY,
                                         message_len);
             
             if (do_send(ptls->tcpls, NULL, con) <= 0) {
@@ -2882,7 +2882,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             ptls->tcpls->sending_con = con; 
 
             stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-                ptls->traffic_protection.enc.aead, message, PONG_NAT,
+                ptls->traffic_protection.enc.aead, message, NAT_REPLY,
                                         message_len);
             
             if (do_send(ptls->tcpls, NULL, con) <= 0) {
@@ -2895,7 +2895,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         }
         break;
     }
-    case PONG_NAT:
+    case NAT_REPLY:
     {
         int offset = 0;
         uint32_t peer_transportid = ntohl(*(uint32_t*) input);
@@ -2913,7 +2913,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           con_rcv.sin_addr = *(struct in_addr*)&input[offset];
 
           if(ptls->ctx->nat_event_cb){
-            ptls->ctx->nat_event_cb(ptls->tcpls, PONG_NAT_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
+            ptls->ctx->nat_event_cb(ptls->tcpls, NAT_REPLY_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
           } 
         } else {
 
@@ -2924,7 +2924,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           con_rcv.sin6_addr = *(struct in6_addr*)&input[offset];
 
           if(ptls->ctx->nat_event_cb){
-            ptls->ctx->nat_event_cb(ptls->tcpls, PONG_NAT_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
+            ptls->ctx->nat_event_cb(ptls->tcpls, NAT_REPLY_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
           } 
         }
       break;

@@ -442,7 +442,7 @@ static int handle_nat_event(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr
         fprintf(stderr, "NAT request received, sending reply\n");
         break;
       }
-    case PONG_NAT_RECEIVED:
+    case NAT_REPLY_RECEIVED:
     {
       fprintf(stderr, "NAT replied received ");
       connect_info_t *con = connection_get(tcpls, transportid);

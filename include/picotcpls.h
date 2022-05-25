@@ -63,7 +63,7 @@ typedef enum tcpls_enum_t {
   PING_NAT,
   PONG_RTT,
   PONG_TCP,
-  PONG_NAT,
+  NAT_REPLY,
   FLOW_CONTROL,
 
   /* since it is a protocol message (we do memcpy of this thing), make sure the
@@ -90,7 +90,7 @@ typedef enum tcpls_event_t {
   PING_NAT_RECEIVED,
   PONG_RTT_RECEIVED,
   PONG_TCP_RECEIVED,
-  PONG_NAT_RECEIVED,
+  NAT_REPLY_RECEIVED,
 
   FLOW_CONTROL_RECEIVED
 } tcpls_event_t;
