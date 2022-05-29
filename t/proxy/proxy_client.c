@@ -553,7 +553,7 @@ static int handle_goodput_test(tcpls_t * tcpls, internal_data_t *data, tcpls_buf
   }
 }
 
-static int handle_requests_test(tcpls_t * tcpls, internal_data_t *data, tcpls_buffer_t * recvbuf){
+static int handle_requests_test(tcpls_t * tcpls, internal_data_t *data, tcpls_buffer_t * recvbuf, int request_size){
   fd_set readset, writeset;
   int maxfd = 0;
   struct timeval timeout;
@@ -562,6 +562,7 @@ static int handle_requests_test(tcpls_t * tcpls, internal_data_t *data, tcpls_bu
   timeout.tv_sec = 100;
   long total_requests = 0;
   int acked = 1;
+  int received = 0;
   int ret;
   while(1){
     FD_ZERO(&readset);
@@ -577,23 +578,28 @@ static int handle_requests_test(tcpls_t * tcpls, internal_data_t *data, tcpls_bu
     for(int i = 0 ; i < data->tcpls_conns->size ; i++){
       conn = list_get(data->tcpls_conns, i);
       if(FD_ISSET(conn->socket, &writeset) && conn->state > CLOSED && acked){
-        ret = tcpls_send(tcpls->tls, conn->streamid, "req", 4);
+        uint8_t req[800];
+        ret = tcpls_send(tcpls->tls, conn->streamid, req, 800);
         if(ret < 0){
           perror("tcpls send");
         }
         acked = 0;
+        received = 0;
       }
       if(FD_ISSET(conn->socket, &readset) && conn->state > CLOSED ){
           ret = handle_tcpls_read(conn->tcpls, conn->socket, recvbuf, data->streamlist, data->tcpls_conns);
           ptls_buffer_t *buf = tcpls_get_stream_buffer(recvbuf, conn->streamid);
           if(buf->off > 0){
-            total_requests += 1;
-            acked = 1;
+            received += buf->off;
+            if(received >= request_size){
+              total_requests += 1;
+              acked = 1;
+            }
             buf->off = 0; // ignore received data
           }
       }      
     }
-    if(total_requests >= 100000){
+    if(total_requests >= 1000){
       struct timeval now;
       gettimeofday(&now, NULL);
       time_t sec = now.tv_sec - data->test_start_timer.tv_sec;
@@ -609,7 +615,7 @@ static int handle_requests_test(tcpls_t * tcpls, internal_data_t *data, tcpls_bu
 }
 
 
-static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd, int fast, performance_test test){
+static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd, int fast, performance_test test, int request_size){
     int ret;
     tcpls_buffer_t *recvbuf = tcpls_stream_buffers_new(tcpls, 2);
     if(handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, data->tcpls_conns) < 0){
@@ -632,7 +638,7 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
       return handle_latency_test(tcpls, data, recvbuf);
       break;
     case T_REQUESTS:
-      return (handle_requests_test(tcpls, data, recvbuf));
+      return (handle_requests_test(tcpls, data, recvbuf, request_size));
       break;
     case T_TCPLS_LATENCY:{
       struct timeval now;
@@ -726,7 +732,7 @@ static int handle_tunnel_transfer(tcpls_t *tcpls,internal_data_t *data,int io_fd
 }
 
 
-static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_context_t *ctx,ptls_handshake_properties_t *hsprop, internal_data_t *data,const char *server_name ,const char *input_file, int fast, performance_test test){
+static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_context_t *ctx,ptls_handshake_properties_t *hsprop, internal_data_t *data,const char *server_name ,const char *input_file, int fast, performance_test test, int request_size){
     hsprop->client.esni_keys = resolve_esni_keys(server_name);
     data->tcpls_conns = new_list(sizeof(tcpls_conn_t), 2);
     data->streamlist = new_list(sizeof(streamid_t), 2);
@@ -756,7 +762,7 @@ static int start_client(struct sockaddr_storage *sockaddrs, int nb_addrs, ptls_c
       }
     } 
 
-    handle_tunnel_transfer(tcpls, data, io_fd, fast, test);
+    handle_tunnel_transfer(tcpls, data, io_fd, fast, test, request_size);
     free_data(data);
     
     return 0;
@@ -779,7 +785,7 @@ int main(int argc, char **argv){
     ptls_context_t ctx = {ptls_openssl_random_bytes, &ptls_get_time, key_exchanges, cipher_suites};
     ptls_handshake_properties_t hsprop = {{{{NULL}}}};
 
-    int ch, fast = 0;
+    int ch, fast = 0, response_size = 0;
     performance_test test = T_NOTEST;
     const char *proxy_host, *proxy_port,*tcp_host, *tcp_port, *input_file = NULL;
 
@@ -788,7 +794,7 @@ int main(int argc, char **argv){
     data.proxy_addrsV6 = new_list(40,2);
     data.proxy_addrs = new_list(16,2);
 
-    while((ch = getopt(argc, argv, "vt:fi:p:P:")) != -1){
+    while((ch = getopt(argc, argv, "vt:fi:p:P:r:")) != -1){
         switch (ch){
         case 'f':{
             fast = 1;
@@ -834,6 +840,10 @@ int main(int argc, char **argv){
           else{
             fprintf(stderr, "Unknown test: %s\n", optarg);
           }
+          break;
+        }
+        case 'r':{
+          response_size = atoi(optarg);
           break;
         }
         case 'v':{
@@ -915,5 +925,5 @@ int main(int argc, char **argv){
     char myIPString[40];
     inet_ntop(AF_INET6, &data.peer_addr->sin6_addr, myIPString, sizeof(myIPString));
     
-    return start_client(sockaddrs, nbr_addrs, &ctx, &hsprop, &data, proxy_host ,input_file, fast, test);
+    return start_client(sockaddrs, nbr_addrs, &ctx, &hsprop, &data, proxy_host ,input_file, fast, test, response_size);
 }

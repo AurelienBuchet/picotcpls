@@ -6,7 +6,7 @@ do
       ./../../tcp_simple_server -s -4 10.100.0.1 8080 > /dev/null
    elif [ $1 -eq 2 ]
    then
-      ./../../tcp_simple_server -r -4 10.100.0.1 8080 > /dev/null
+      ./../../tcp_simple_server -r $2 -4 10.100.0.1 8080 > /dev/null
    else
       ./../../tcp_simple_server -4 10.100.0.1 8080 > /dev/null
    fi

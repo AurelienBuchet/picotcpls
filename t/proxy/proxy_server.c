@@ -49,6 +49,13 @@ typedef enum tunnel_message_type_t {
     END = 0xff,
     } tunnel_message_type;
 
+typedef enum tunnel_error_type_t {
+    PROTOCOL_VIOLATION,
+    MALFORMED_TLV,
+    CONNECTION_FAILURE,
+    sentinel = 0xffff,
+    } tunnel_error_type;
+
 typedef enum tcpls_conn_state_t{
     PROXY_CLOSED,
     PROXY_WAITING_TCP_CONNECT,
@@ -249,7 +256,9 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
             printf("Total received : %ld\n", ctcpls->data_received);
             close(ctcpls->tcp->socket);
             list_remove(conntcpls, ctcpls);
-            exit(0);
+            if(conntcpls->size == 0){
+              exit(0);
+            }
           }
         }
       }
@@ -361,6 +370,27 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
   return ret;
 }
 
+static int send_error_tlv( tcpls_conn_t *conn, tunnel_error_type type){
+  uint8_t message[6];
+  message[0] = ERROR;
+  message[1] = 2;
+  uint16_t *error_code = (uint16_t *) (message+2);
+  *error_code = type;
+  message[4] = END;
+  message[5] = 0;
+  int ret;
+  while((ret = tcpls_send(conn->tcpls->tls, conn->streamid, message, 6)) == TCPLS_CON_LIMIT_REACHED){
+
+  }
+  if(ret != 0) {
+    fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
+        ret, conn->streamid);
+    return -1;
+  }
+  tcpls_stream_close(conn->tcpls->tls, conn->streamid, 1);
+  return 0; 
+}
+
 static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t *message, size_t message_len){
     if(message_len < 20){
       return -1;
@@ -368,11 +398,13 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
     tunnel_message_type type = message[0];
     if(type != TCP_CONNECT){
       fprintf(stderr, "Message isn't a TCP Connect\n");
+      send_error_tlv( conn, PROTOCOL_VIOLATION);
       return -1;
     }
     uint8_t tlv_len = message[1];
     if(tlv_len != 18){
       fprintf(stderr, "Invalid message length\n");
+      send_error_tlv( conn, MALFORMED_TLV);
       return -1;
     }
     in_port_t port = *(in_port_t *) &message[2];
@@ -391,7 +423,7 @@ static int handle_tcp_connect(internal_data_t *data, tcpls_conn_t *conn, uint8_t
     if(connect(sock, (struct sockaddr *) &peer_addr, sizeof(struct sockaddr_in6)) != 0){
         perror("Connect");
         fprintf(stderr, "Fail to establish TCP tunnel to %s:%hu\n", addr_str, ntohs(peer_addr.sin6_port));
-
+        send_error_tlv(conn, CONNECTION_FAILURE);
         return -1;
     }
     if(verbose)
@@ -460,7 +492,7 @@ static int handle_tcp_read(internal_data_t *data, tcp_conn_t *conn_tcp){
     return 0;
 }
 
-static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *writeset, performance_test test){
+static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *writeset, performance_test test, int request_size){
     int ret = 1;
     
     tcpls_conn_t *conn;
@@ -504,7 +536,8 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
                       ret = handle_tcp_forward(data, conn->tcp, buf->base, buf->off);
                       buf->off = 0;
                     } else if(test == T_REQUESTS){
-                      ret = tcpls_send(conn->tcpls->tls, conn->streamid, "ack", 4);
+                      uint8_t req [request_size];
+                      ret = tcpls_send(conn->tcpls->tls, conn->streamid, req, request_size);
                     }
                 }
             }
@@ -527,7 +560,7 @@ static int handle_proxy_server(internal_data_t *data, fd_set *readset, fd_set *w
     return ret;
 }
 
-static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, ptls_context_t *ctx, ptls_handshake_properties_t *hsprop, internal_data_t *data, performance_test test){
+static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, ptls_context_t *ctx, ptls_handshake_properties_t *hsprop, internal_data_t *data, performance_test test, int request_size){
     int listen_socks[nbr_addr];
     data->tcpls_conns = new_list(sizeof(tcpls_conn_t), 2);
     data->tcp_conns = new_list(sizeof(tcp_conn_t), 2);
@@ -652,7 +685,7 @@ static int start_server(struct sockaddr_storage *ours_sockaddr, int nbr_addr, pt
            }
         }
         //Handle data 
-        if(handle_proxy_server(data, &readset, &writeset, test) < 0){
+        if(handle_proxy_server(data, &readset, &writeset, test, request_size) < 0){
             //goto Exit;
         }
     }
@@ -676,7 +709,7 @@ int main(int argc, char **argv){
     ptls_handshake_properties_t hsprop = {{{{NULL}}}};
     performance_test test = T_NOTEST;
 
-    int ch;
+    int ch, request_size = 0;
     char *host, *port;
     internal_data_t data = {NULL};
 
@@ -684,7 +717,7 @@ int main(int argc, char **argv){
     data.our_addrs = new_list(16, 2);
                 
 
-    while ((ch = getopt(argc, argv, "t:c:k:z:Z:v")) != -1){
+    while ((ch = getopt(argc, argv, "t:c:k:z:Z:vr:")) != -1){
         switch(ch){
             case 'c':{
                 if (ctx.certificates.count != 0) {
@@ -734,6 +767,10 @@ int main(int argc, char **argv){
               else{
                 fprintf(stderr, "Unknown test: %s\n", optarg);
               }
+              break;
+            }
+            case 'r':{
+              request_size = atoi(optarg);
               break;
             }
             default:{
@@ -788,5 +825,5 @@ int main(int argc, char **argv){
         exit(1);
     }
 
-    return start_server(ours_sockaddr, nbr_addrs, &ctx, &hsprop, &data, test);
+    return start_server(ours_sockaddr, nbr_addrs, &ctx, &hsprop, &data, test, request_size);
 }

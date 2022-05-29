@@ -90,15 +90,15 @@ static int handle_goodput_test(int sock, struct timeval old){
     }
 }
 
-static int handle_requests_test(int sock, struct timeval old){
+static int handle_requests_test(int sock, struct timeval old, int response_size){
     fd_set readset, writeset;
     int maxfd = sock;
     struct timeval timeout;
     memset(&timeout, 0, sizeof(struct timeval));
-    static const size_t block_size = 4;
-    uint8_t buf[block_size];
+    uint8_t buf[response_size];
     long total_requests = 0;
     int acked = 1;
+    int received = 0;
     int ret;
     while (1){
         timeout.tv_sec = 1;
@@ -107,23 +107,26 @@ static int handle_requests_test(int sock, struct timeval old){
         FD_SET(sock , &writeset);
         ret = select(maxfd+1, &readset, &writeset, NULL, &timeout);
         if(acked){
-            int ret = write(sock, "req", 4);
+            uint8_t req[800];
+            int ret = write(sock, req, 800);
             acked = 0;
+            received = 0;
             if(ret < 0){
                 perror("send");
             }
         }
         if(FD_ISSET(sock, &readset)){
-            int n_rec = read(sock, buf, block_size );
+            int n_rec = read(sock, buf, response_size );
             if(n_rec < 0){
                 perror("received failed");
             }
-            if(n_rec > 0){
+            received += n_rec;
+            if(received >= response_size){
                 total_requests += 1;
                 acked = 1;
             }
         }
-        if(total_requests >= 100000){
+        if(total_requests >= 1000){
             struct timeval now;
             gettimeofday(&now, NULL);
             time_t sec = now.tv_sec - old.tv_sec;
@@ -140,12 +143,12 @@ static int handle_requests_test(int sock, struct timeval old){
 }
 
 int main(int argc, char **argv){
-    int sock, ch;
+    int sock, ch, response_size = 0;
     int family = AF_INET6;
     performance_test test = T_NOTEST;
     struct timeval test_start_timer;
 
-    while((ch = getopt(argc, argv, "t:4")) != -1){
+    while((ch = getopt(argc, argv, "t:4r:")) != -1){
         switch (ch){
         case '4':{
             family = AF_INET;
@@ -162,6 +165,10 @@ int main(int argc, char **argv){
             fprintf(stderr, "Unknown test: %s\n", optarg);
           }
           break;
+        }
+        case 'r':{
+            response_size = atoi(optarg);
+            break;
         }
         default:
             break;
@@ -223,7 +230,7 @@ int main(int argc, char **argv){
         }
         case T_REQUESTS:{
             gettimeofday(&test_start_timer, NULL);
-            return handle_requests_test(sock, test_start_timer);
+            return handle_requests_test(sock, test_start_timer, response_size);
             break;
         }
         case T_NOTEST:{

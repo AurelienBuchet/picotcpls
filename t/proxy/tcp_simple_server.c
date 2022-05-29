@@ -21,7 +21,7 @@ int main(int argc, char **argv){
     char *input_file = NULL;
     int family = AF_INET6;
 
-    while((ch = getopt(argc, argv, "hsrf:4")) != -1){
+    while((ch = getopt(argc, argv, "hsr:f:4")) != -1){
         switch (ch){
         case 'f':{
             input_file = optarg;
@@ -32,7 +32,7 @@ int main(int argc, char **argv){
             break;
         }
         case 'r':{
-            reply = 1;
+            reply = atoi(optarg);
             break;
         }
         case 's':{
@@ -153,7 +153,8 @@ int main(int argc, char **argv){
                 }
             }
             if(reply){
-                n_rec = write(sock, "ack", 4);
+                uint8_t req[reply];
+                n_rec = write(sock, req, reply);
             }
         }
         if(FD_ISSET(sock, &writeset) && send){
