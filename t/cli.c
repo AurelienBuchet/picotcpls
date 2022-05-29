@@ -413,7 +413,7 @@ static int handle_rtt_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval 
         fprintf(stderr, "RTT request received, sending reply");
         break;
       }
-    case PONG_RTT_RECEIVED:
+    case RTT_REPLY_RECEIVED:
     {
       struct timeval td = timediff(&now, &tv);
       fprintf(stderr, "RTT replied received, estimated RTT : %0.8f sec\n",td.tv_sec + 1e-6*td.tv_usec);
@@ -442,7 +442,7 @@ static int handle_nat_event(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr
         fprintf(stderr, "NAT request received, sending reply\n");
         break;
       }
-    case PONG_NAT_RECEIVED:
+    case NAT_REPLY_RECEIVED:
     {
       fprintf(stderr, "NAT replied received ");
       connect_info_t *con = connection_get(tcpls, transportid);
@@ -957,7 +957,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   gettimeofday(&(data->timer), NULL);  
 
   //tcpls_limit_peer_con(tcpls, 0, 1000000);
-  //tcpls_ping_tcp(tcpls, 0);
+  //tcpls_PING_INFO(tcpls, 0);
 
   while (1) {
     /*cleanup*/

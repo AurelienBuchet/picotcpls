@@ -28,6 +28,8 @@ with open("tcpls_log_good") as file:
 
 values = [ tcp_values,tcpls_values, proxy_values]
 
+plt.rcParams['font.size'] = 20
+
 fig = plt.figure()
 
 plt.boxplot(values)

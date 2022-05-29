@@ -59,11 +59,11 @@ typedef enum tcpls_enum_t {
    * New stuff
    */
   PING_RTT,
-  PING_TCP,
+  PING_INFO,
   PING_NAT,
-  PONG_RTT,
-  PONG_TCP,
-  PONG_NAT,
+  RTT_REPLY,
+  INFO_REPLY,
+  NAT_REPLY,
   FLOW_CONTROL,
 
   /* since it is a protocol message (we do memcpy of this thing), make sure the
@@ -86,11 +86,11 @@ typedef enum tcpls_event_t {
   REMOVE_ADDR,
   /* ping events*/
   PING_RTT_RECEIVED,
-  PING_TCP_RECEIVED,
+  PING_INFO_RECEIVED,
   PING_NAT_RECEIVED,
-  PONG_RTT_RECEIVED,
-  PONG_TCP_RECEIVED,
-  PONG_NAT_RECEIVED,
+  RTT_REPLY_RECEIVED,
+  INFO_REPLY_RECEIVED,
+  NAT_REPLY_RECEIVED,
 
   FLOW_CONTROL_RECEIVED
 } tcpls_event_t;
@@ -428,7 +428,7 @@ int tcpls_ping_rtt(tcpls_t *tcpls, int transportid);
 
 int tcpls_ping_nat(tcpls_t *tcpls, int transportid);
 
-int tcpls_ping_tcp(tcpls_t *tcpls, int transportid);
+int tcpls_ping_info(tcpls_t *tcpls, int transportid);
 
 int tcpls_limit_con(tcpls_t *tcpls, int transportid, uint64_t rate);
 

@@ -1641,7 +1641,7 @@ int tcpls_ping_nat(tcpls_t *tcpls, int transportid){
 /**
  * Sends a ping tcp message on the connection
  */
-int tcpls_ping_tcp(tcpls_t *tcpls, int transportid){
+int tcpls_ping_info(tcpls_t *tcpls, int transportid){
   connect_info_t *con = connection_get(tcpls, transportid);
   if (!con)
     return PTLS_ERROR_CONN_NOT_FOUND;
@@ -1668,7 +1668,7 @@ int tcpls_ping_tcp(tcpls_t *tcpls, int transportid){
   tcpls->sending_stream = NULL;
   tcpls->sending_con = con;
   stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf,
-      tcpls->tls->traffic_protection.enc.aead, message, PING_TCP,
+      tcpls->tls->traffic_protection.enc.aead, message, PING_INFO,
                               message_len);
   /* send the ping message right away */
   if (do_send(tcpls, 0, con) <= 0) {
@@ -2796,7 +2796,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           return PTLS_ERROR_NO_MEMORY;
         }
         stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-            ptls->traffic_protection.enc.aead, message, PONG_RTT,
+            ptls->traffic_protection.enc.aead, message, RTT_REPLY,
                                   message_len);
         
         /* send the pong message right away */
@@ -2806,12 +2806,12 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         }
         break;
       }
-    case PONG_RTT: 
+    case RTT_REPLY: 
       {
         uint32_t peer_transportid = ntohl(*(uint32_t*) input);
         struct timeval peer_timestamp = *(struct timeval*) &input[4];
         if(ptls->ctx->rtt_event_cb){
-          ptls->ctx->rtt_event_cb(ptls->tcpls, PONG_RTT_RECEIVED, peer_timestamp, peer_transportid);
+          ptls->ctx->rtt_event_cb(ptls->tcpls, RTT_REPLY_RECEIVED, peer_timestamp, peer_transportid);
         }
         break;
       }
@@ -2852,7 +2852,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             ptls->tcpls->sending_con = con; 
 
             stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-                ptls->traffic_protection.enc.aead, message, PONG_NAT,
+                ptls->traffic_protection.enc.aead, message, NAT_REPLY,
                                         message_len);
             
             if (do_send(ptls->tcpls, NULL, con) <= 0) {
@@ -2882,7 +2882,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
             ptls->tcpls->sending_con = con; 
 
             stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-                ptls->traffic_protection.enc.aead, message, PONG_NAT,
+                ptls->traffic_protection.enc.aead, message, NAT_REPLY,
                                         message_len);
             
             if (do_send(ptls->tcpls, NULL, con) <= 0) {
@@ -2895,7 +2895,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         }
         break;
     }
-    case PONG_NAT:
+    case NAT_REPLY:
     {
         int offset = 0;
         uint32_t peer_transportid = ntohl(*(uint32_t*) input);
@@ -2913,7 +2913,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           con_rcv.sin_addr = *(struct in_addr*)&input[offset];
 
           if(ptls->ctx->nat_event_cb){
-            ptls->ctx->nat_event_cb(ptls->tcpls, PONG_NAT_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
+            ptls->ctx->nat_event_cb(ptls->tcpls, NAT_REPLY_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
           } 
         } else {
 
@@ -2924,12 +2924,12 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           con_rcv.sin6_addr = *(struct in6_addr*)&input[offset];
 
           if(ptls->ctx->nat_event_cb){
-            ptls->ctx->nat_event_cb(ptls->tcpls, PONG_NAT_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
+            ptls->ctx->nat_event_cb(ptls->tcpls, NAT_REPLY_RECEIVED, (struct sockaddr *)&con_rcv, con->this_transportid);
           } 
         }
       break;
     }
-    case PING_TCP:
+    case PING_INFO:
     {
       uint32_t peer_transportid = ntohl(*(uint32_t*) input);
       connect_info_t *con = connection_get(ptls->tcpls, peer_transportid);
@@ -2942,18 +2942,14 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         fprintf(stderr, "Failed to get tcp_infos\n");
       }
      
-      uint8_t message[4*sizeof(uint32_t)];
+      uint8_t message[sizeof(uint32_t) + sizeof(struct tcp_info)];
       size_t message_len = sizeof(message);
       int offset = 0;
       if(message_len >= 4*sizeof(uint64_t)){
         peer_transportid = htonl(peer_transportid);
         memcpy(message + offset, &peer_transportid, 4);
         offset += 4;
-        memcpy(message + offset, &(our_infos.tcpi_rtt), 4);
-        offset += 4;
-        memcpy(message + offset, &(our_infos.tcpi_snd_cwnd), 4);
-        offset += 4;
-        memcpy(message + offset, &(our_infos.tcpi_lost), 4);
+        memcpy(message + offset, &our_infos, sizeof(struct tcp_info));
       } else{
         return PTLS_ERROR_NO_MEMORY;
       }
@@ -2961,16 +2957,21 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
       ptls->tcpls->sending_stream = NULL;
       ptls->tcpls->sending_con = con;
       stream_send_control_message(ptls, 0, ptls->tcpls->sendbuf,
-          ptls->traffic_protection.enc.aead, message, PONG_TCP, message_len);
+          ptls->traffic_protection.enc.aead, message, INFO_REPLY, message_len);
       if (do_send(ptls->tcpls, NULL, con) <= 0) {
         //XXX
         fprintf(stderr, "Unimplemented\n");
       }
       break;
     }
-    case PONG_TCP:
+    case INFO_REPLY:
     {
-      break;
+        uint32_t peer_transportid = ntohl(*(uint32_t*) input);
+        struct tcp_info peer_infos = *(struct timeval*) &input[4];
+        if(ptls->ctx->info_event_cb){
+          ptls->ctx->info_event_cb(ptls->tcpls, INFO_REPLY_RECEIVED, peer_infos, peer_transportid);
+        }
+        break;
     }
     case FLOW_CONTROL:
     {
