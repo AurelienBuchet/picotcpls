@@ -86,6 +86,7 @@ typedef enum integration_test_t {
   T_MULTIPLEXING,
   T_RTT,
   T_NAT,
+  T_INFO,
   T_LATENCY
 } integration_test_t;
 
@@ -417,6 +418,9 @@ static int handle_rtt_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval 
     {
       struct timeval td = timediff(&now, &tv);
       fprintf(stderr, "RTT replied received, estimated RTT : %0.8f sec\n",td.tv_sec + 1e-6*td.tv_usec);
+      if(transportid == 0){
+        exit(0);
+      }
       break;
     }
     default:
@@ -508,6 +512,37 @@ static int handle_nat_event(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr
           fprintf(stderr,"Local address and port match received ones\n");
         }
       }
+      if(transportid == 0){
+        exit(0);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  return 0;
+}
+
+static int handle_info_event(tcpls_t *tcpls, tcpls_event_t event, struct tcp_info infos, int transportid){
+  struct timeval now;
+  struct tm *tm;
+  gettimeofday(&now, NULL);
+  tm = localtime(&now.tv_sec);
+  char timebuf[32], usecbuf[7];
+  strftime(timebuf, 32, "%H:%M:%S", tm);
+  strcat(timebuf, ".");
+  sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+  strcat(timebuf, usecbuf);
+  fprintf(stderr, "%s INFO event %d\n", timebuf, event);
+  switch (event) {
+    case PING_INFO_RECEIVED:
+      {
+        fprintf(stderr, "Info request received, sending reply");
+        break;
+      }
+    case INFO_REPLY_RECEIVED:
+    {
+      fprintf(stderr, "Info reply received, peer information :\n \t RTT : %u msec\n \t Losses : %u \n \t Retransmit : %u \n",infos.tcpi_rtt, infos.tcpi_lost, infos.tcpi_retrans);
       if(transportid == 0){
         exit(0);
       }
@@ -739,7 +774,7 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
   return 1;
 }
 
-static int handle_server_nat_test(list_t *conn_tcpls, fd_set *readset){
+static int handle_server_reply_test(list_t *conn_tcpls, fd_set *readset){
    int ret = 1;
 
   for (int i = 0; i < conn_tcpls->size; i++) {
@@ -1201,7 +1236,7 @@ static int handle_client_simple_handshake(tcpls_t *tcpls, struct cli_data *data)
   return ret;
 }
 
-static int handle_client_nat_test(tcpls_t *tcpls, struct cli_data *data) {
+static int handle_client_ping_test(tcpls_t *tcpls,integration_test_t test, struct cli_data *data) {
   int ret;
   struct timeval timeout;
   timeout.tv_sec = 5;
@@ -1218,9 +1253,23 @@ static int handle_client_nat_test(tcpls_t *tcpls, struct cli_data *data) {
   if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
     ret = -1;
   }
-  fprintf(stderr, "Handshake done checking for nat\n");
+  fprintf(stderr, "Handshake done sending ping\n");
 
-  tcpls_ping_nat(tcpls, 0);
+  switch (test)
+  {
+  case T_NAT:
+    tcpls_ping_nat(tcpls, 0);
+    break;
+  case T_RTT:
+    tcpls_ping_rtt(tcpls, 0);
+    break;
+  case T_INFO:
+    tcpls_ping_info(tcpls, 0);
+    break;
+  default:
+    fprintf(stderr, "Unknown ping test %d\n", test);
+    break;
+  }
 
   int maxfds = 0;
   fd_set readfds, writefds, exceptfds;
@@ -1357,11 +1406,25 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
         printf("TEST 0-RTT: FAILURE\n");
       break;
     case T_NAT:
-      ret = handle_client_nat_test(tcpls, data);
+      ret = handle_client_ping_test(tcpls, test, data);
       if(!ret)
         printf("TEST NAT: SUCCESS\n");
       else
         printf("TEST NAT: FAILURE\n");
+      break;
+    case T_RTT:
+      ret = handle_client_ping_test(tcpls, test, data);
+      if(!ret)
+        printf("TEST RTT: SUCCESS\n");
+      else
+        printf("TEST RTT: FAILURE\n");
+      break;
+    case T_INFO:
+      ret = handle_client_ping_test(tcpls, test, data);
+      if(!ret)
+        printf("TEST INFO: SUCCESS\n");
+      else
+        printf("TEST INFO: FAILURE\n");
       break;
     case T_LATENCY:
       ret = handle_client_latency_test(tcpls, data);
@@ -1665,6 +1728,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   ctx->address_event_cb = &handle_address_event;
   ctx->rtt_event_cb = &handle_rtt_event;
   ctx->nat_event_cb = &handle_nat_event;
+  ctx->info_event_cb = &handle_info_event;
   ctx->cb_data = conn_tcpls;
   socklen_t salen;
   struct timeval timeout;
@@ -1804,7 +1868,9 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
       int ret;
       switch (test) {
         case T_NAT:
-            if ((ret = handle_server_nat_test(conn_tcpls, &readset)) < -1) {
+        case T_RTT:
+        case T_INFO:
+            if ((ret = handle_server_reply_test(conn_tcpls, &readset)) < -1) {
               goto Exit;
             }
           break;
@@ -1890,6 +1956,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   ctx->connection_event_cb = &handle_client_connection_event;
   ctx->rtt_event_cb = &handle_rtt_event;
   ctx->nat_event_cb = &handle_nat_event;
+  ctx->info_event_cb = &handle_info_event;
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   ctx->output_decrypted_tcpls_data = 0;
@@ -2150,6 +2217,11 @@ int main(int argc, char **argv)
                   test = T_MULTIPLEXING;
                 else if (strcasecmp(optarg, "nat") == 0)
                   test = T_NAT;
+                else if (strcasecmp(optarg, "rtt") == 0)
+                  test = T_RTT;
+                else if (strcasecmp(optarg, "info") == 0){
+                  test = T_INFO;
+                }
                 else if (strcasecmp(optarg, "latency") == 0)
                   test = T_LATENCY;
                 else {

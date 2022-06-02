@@ -52,7 +52,7 @@
 
 #include <arpa/inet.h>
 #include <linux/bpf.h>
-#include <linux/tcp.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2941,6 +2941,10 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
       if(getsockopt(con->socket, IPPROTO_TCP, TCP_INFO, (void *)&our_infos, &info_length)){
         fprintf(stderr, "Failed to get tcp_infos\n");
       }
+
+      if(ptls->ctx->info_event_cb){
+        ptls->ctx->info_event_cb(ptls->tcpls, PING_INFO_RECEIVED, our_infos, peer_transportid);
+      }
      
       uint8_t message[sizeof(uint32_t) + sizeof(struct tcp_info)];
       size_t message_len = sizeof(message);
@@ -2967,7 +2971,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
     case INFO_REPLY:
     {
         uint32_t peer_transportid = ntohl(*(uint32_t*) input);
-        struct tcp_info peer_infos = *(struct timeval*) &input[4];
+        struct tcp_info peer_infos = *(struct tcp_info*) &input[4];
         if(ptls->ctx->info_event_cb){
           ptls->ctx->info_event_cb(ptls->tcpls, INFO_REPLY_RECEIVED, peer_infos, peer_transportid);
         }

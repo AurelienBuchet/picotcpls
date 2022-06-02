@@ -35,6 +35,7 @@ extern "C" {
 #include <string.h>
 #include <sys/types.h>
 #include <stddef.h>
+#include <netinet/tcp.h>
 #include "picotcpls.h"
 
 #if __GNUC__ >= 3
