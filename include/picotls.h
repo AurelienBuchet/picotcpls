@@ -892,6 +892,10 @@ typedef struct st_ptls_log_event_t {
      */
     int (*info_event_cb)(tcpls_t *tcpls, tcpls_event_t event, struct tcp_info infos, int transportid);
     /**
+     * A callback used when a flow event occurs
+     */
+    int (*flow_event_cb)(tcpls_t *tcpls, tcpls_event_t event,  uint64_t flow_rate, int transportid);
+    /**
      * Optional data to be passed to the callback functions
      */
     void *cb_data;

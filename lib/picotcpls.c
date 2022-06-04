@@ -1840,15 +1840,18 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
         rret = ptls_receive(tcpls->tls, decryptbuf, con->buffrag, input + *input_off, &consumed);
         *input_off += consumed;
         // if(rret == 0){
-        //   printf("received on stream %u\n", stream->streamid);
+        //   printf("received %lu bytes on stream %u\n", consumed, stream->streamid);
         // } else{
         //   printf("failed on stream %u\n", stream->streamid);
         // }
+        // printf("decrypt buf post %lu \n", decryptbuf->off);
+
       } while (rret == 0 && *input_off < input_size);
       tcpls->tls->traffic_protection.dec.aead = remember_aead;
       /* Add this stream in the want-to-read list for the app */
-      if (decryptbuf->off-decryptoff > 0 && buf->bufkind == STREAMBASED)
+      if (decryptbuf->off-decryptoff > 0 && buf->bufkind == STREAMBASED){
         list_add(buf->wtr_streams, &stream->streamid);
+      }
       /*we need to restore buffrag if we had some and try with another streama*/
       if (rret == PTLS_ALERT_BAD_RECORD_MAC && restore_buf && con->buffrag->capacity) {
         con->buffrag->off = restore_buf;
@@ -1859,17 +1862,17 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
   if (rret == PTLS_ALERT_BAD_RECORD_MAC) {
     if (restore_buf && tcpls->buffrag->capacity)
       tcpls->buffrag->off = restore_buf;
-    //ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
     /* That MUST be a control message */
     ptls_buffer_t deccontrolbuf;
     ptls_buffer_init(&deccontrolbuf, "", 0);
+    ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
     do {
       consumed = input_size - *input_off;
       rret = ptls_receive(tcpls->tls, &deccontrolbuf, tcpls->buffrag, input + *input_off, &consumed);
       *input_off += consumed;
     } while (rret == 0 && *input_off < input_size);
     tcpls->buffrag->off = 0;
-    //tcpls->tls->traffic_protection.dec.aead = remember_aead;
+    tcpls->tls->traffic_protection.dec.aead = remember_aead;
   }
   return rret;
 }
@@ -2988,6 +2991,10 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
       
       tcpls_limit_con(ptls->tcpls, peer_transportid, limit_rate);
 
+      if(ptls->ctx->flow_event_cb){
+        ptls->ctx->flow_event_cb(ptls->tcpls, FLOW_CONTROL_RECEIVED, limit_rate, peer_transportid);
+      }
+
       break;
     }
     default:
@@ -3012,7 +3019,7 @@ int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
   tcpls_stream_t *stream = stream_get(tcpls, tcpls->streamid_rcv);
   if(!stream){
     fprintf(stderr, "received data packet on initial stream\n");
-    return 1;
+    return 0;
   }
   if (tcpls->failover_recovering) {
     /**
