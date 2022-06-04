@@ -134,7 +134,7 @@ struct cli_data {
 static struct tcpls_options tcpls_options;
 
 int data_sent = 0;
-
+uint64_t max_rate;
 
 static void sig_handler(int signo) {
   if (signo == SIGPIPE) {
@@ -412,7 +412,7 @@ static int handle_rtt_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval 
   switch (event) {
     case PING_RTT_RECEIVED:
       {
-        fprintf(stderr, "RTT request received, sending reply");
+        fprintf(stderr, "RTT request received, sending reply\n");
         break;
       }
     case RTT_REPLY_RECEIVED:
@@ -420,10 +420,33 @@ static int handle_rtt_event(tcpls_t *tcpls, tcpls_event_t event, struct timeval 
       struct timeval td = timediff(&now, &tv);
       fprintf(stderr, "RTT replied received, estimated RTT : %0.8f sec\n",td.tv_sec + 1e-6*td.tv_usec);
       if(transportid == 0){
-        exit(0);
+        //exit(0);
       }
       break;
     }
+    default:
+      break;
+  }
+  return 0;
+}
+
+static int handle_flow_event(tcpls_t *tcpls, tcpls_event_t event, uint64_t flow_rate, int transportid){
+  struct timeval now;
+  struct tm *tm;
+  gettimeofday(&now, NULL);
+  tm = localtime(&now.tv_sec);
+  char timebuf[32], usecbuf[7];
+  strftime(timebuf, 32, "%H:%M:%S", tm);
+  strcat(timebuf, ".");
+  sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+  strcat(timebuf, usecbuf);
+  fprintf(stderr, "%s FLOW event %d\n", timebuf, event);
+  switch (event) {
+    case FLOW_CONTROL_RECEIVED:
+      {
+        fprintf(stderr, "Flow limit received, max rate for connection %d is now %lu \n", transportid, flow_rate);
+        break;
+      }
     default:
       break;
   }
@@ -776,7 +799,7 @@ static int handle_tcpls_multi_write(list_t *conn_tcpls, int *inputfd, fd_set *wr
   return 1;
 }
 
-static int handle_server_reply_test(list_t *conn_tcpls, fd_set *readset){
+static int handle_server_reply_test(list_t *conn_tcpls, fd_set *readset, int *sent, integration_test_t test){
    int ret = 1;
 
   for (int i = 0; i < conn_tcpls->size; i++) {
@@ -796,9 +819,29 @@ static int handle_server_reply_test(list_t *conn_tcpls, fd_set *readset){
       } else{
         conn->recvbuf->decryptbuf->off = 0;
       }
+      if(!*sent){
+        printf("sending ping \n");
+        *sent = 1;
+        switch (test)
+          {
+          case T_NAT:
+            tcpls_ping_nat(conn->tcpls, 0);
+            break;
+          case T_RTT:
+            tcpls_ping_rtt(conn->tcpls, 0);
+            break;
+          case T_INFO:
+            tcpls_ping_info(conn->tcpls, 0);
+            break;
+          default:
+            fprintf(stderr, "Unknown ping test %d\n", test);
+            break;
+          }
+      }
       break;
     }
   }
+
   return ret;
 }
 
@@ -965,11 +1008,11 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   gettimeofday(&t_init, NULL);
   int ret;
   tcpls_buffer_t *recvbuf;
-  //if(test == T_MULTIPLEXING){
-    //recvbuf = tcpls_stream_buffers_new(tcpls, max_streams);
-  //} else{
-  recvbuf = tcpls_aggr_buffer_new(tcpls);
-  //}
+  if(test == T_MULTIPLEXING || test == T_FLOW){
+    recvbuf = tcpls_stream_buffers_new(tcpls, max_streams);
+  } else{
+    recvbuf = tcpls_aggr_buffer_new(tcpls);
+  }
   //FILE *mtest = fopen("Files/multipath_test.data", "w");
   //assert(mtest);
   if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
@@ -982,6 +1025,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   int has_remigrated = 0;
   int has_multipath =0;
   int has_probed = 0;
+  int has_limitation = 0;
   int n_streams = 1;
   int received_data = 0;
   int mB_received = 0;
@@ -1065,7 +1109,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
           char timebuf[32], usecbuf[7];
           strftime(timebuf, 32, "%H:%M:%S", tm);
           strcat(timebuf, ".");
-          sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+          sprintf(usecbuf, "%06d", (uint32_t) now.tv_usec);
           strcat(timebuf, usecbuf);
           fprintf(outputfile, "%s %s > %s %u\n", timebuf, buf_ipdest, buf_ipsrc, ret);
         }
@@ -1217,6 +1261,22 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
           fprintf(stderr, "Failed to attach stream %u\n", streamid);
         n_streams++;
     }
+    if(test == T_FLOW && diff.tv_usec >= 250000 && max_rate > 0 && !has_limitation){
+      has_limitation = 1;
+      tcpls_limit_peer_con(tcpls, 0, max_rate);
+      if (outputfile) {
+          struct timeval now;
+          struct tm *tm;
+          gettimeofday(&now, NULL);
+          tm = localtime(&now.tv_sec);
+          char timebuf[32], usecbuf[7];
+          strftime(timebuf, 32, "%H:%M:%S", tm);
+          strcat(timebuf, ".");
+          sprintf(usecbuf, "%06d", (uint32_t) now.tv_usec);
+          strcat(timebuf, usecbuf);
+          fprintf(outputfile, "%s limitation %lu\n", timebuf, max_rate);
+        }
+    }
   }
   ret = 0;
 Exit:
@@ -1267,18 +1327,21 @@ static int handle_client_ping_test(tcpls_t *tcpls,integration_test_t test, struc
   }
   fprintf(stderr, "Handshake done sending ping\n");
 
-  switch (test)
-  {
-  case T_NAT:
-    tcpls_ping_nat(tcpls, 0);
-    break;
-  case T_RTT:
-    tcpls_ping_rtt(tcpls, 0);
-    break;
-  default:
-    fprintf(stderr, "Unknown ping test %d\n", test);
-    break;
-  }
+  // switch (test)
+  // {
+  // case T_NAT:
+  //   tcpls_ping_nat(tcpls, 0);
+  //   break;
+  // case T_RTT:
+  //   tcpls_ping_rtt(tcpls, 0);
+  //   break;
+  // case T_INFO:
+  //   tcpls_ping_info(tcpls, 0);
+  //   break;
+  // default:
+  //   fprintf(stderr, "Unknown ping test %d\n", test);
+  //   break;
+  // }
 
   int maxfds = 0;
   fd_set readfds, writefds, exceptfds;
@@ -1447,6 +1510,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
     case T_AGGREGATION:
     case T_AGGREGATION_TIME:
     case T_INFO:
+    case T_FLOW:
       {
         struct timeval timeout;
         timeout.tv_sec = 5;
@@ -1457,12 +1521,15 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
           fprintf(stderr, "tcpls_connect failed with err %d\n", err);
           return 1;
         }
-        if (test == T_MULTIPATH || test == T_AGGREGATION  || test == T_AGGREGATION_TIME || T_MULTIPLEXING){
+        if (test == T_MULTIPATH || test == T_AGGREGATION  || test == T_AGGREGATION_TIME || test == T_MULTIPLEXING){
           tcpls->enable_multipath = 1;
         }
         else {
           if (tcpls->enable_failover)
             tcpls->enable_multipath = 1;
+          else{
+            tcpls->enable_multipath = 0;
+          }
         }
         ret = handle_client_transfer_test(tcpls, test, data,max_streams);
       }
@@ -1738,7 +1805,9 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   ctx->rtt_event_cb = &handle_rtt_event;
   ctx->nat_event_cb = &handle_nat_event;
   ctx->info_event_cb = &handle_info_event;
+  ctx->flow_event_cb = &handle_flow_event;
   ctx->cb_data = conn_tcpls;
+  int sent_ping = 0;
   socklen_t salen;
   struct timeval timeout;
   ctx->output_decrypted_tcpls_data = 0;
@@ -1966,6 +2035,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   ctx->rtt_event_cb = &handle_rtt_event;
   ctx->nat_event_cb = &handle_nat_event;
   ctx->info_event_cb = &handle_info_event;
+  ctx->flow_event_cb = &handle_flow_event;
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   ctx->output_decrypted_tcpls_data = 0;
@@ -2081,7 +2151,7 @@ int main(int argc, char **argv)
   tcpls_options.peer_addrs6 = new_list(39*sizeof(char), 2);
   int family = 0;
 
-  while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:T:m:fg:")) != -1) {
+  while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:T:m:fg:L:")) != -1) {
     switch (ch) {
       case '4':
         family = AF_INET;
@@ -2320,6 +2390,9 @@ int main(int argc, char **argv)
                 break;
       case 'g':
                 goodputfile = optarg;
+                break;
+      case 'L':
+                max_rate = atol(optarg);
                 break;
       default:
                 exit(1);
