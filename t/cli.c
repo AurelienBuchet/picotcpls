@@ -87,6 +87,7 @@ typedef enum integration_test_t {
   T_RTT,
   T_NAT,
   T_INFO,
+  T_FLOW,
   T_LATENCY
 } integration_test_t;
 
@@ -542,7 +543,8 @@ static int handle_info_event(tcpls_t *tcpls, tcpls_event_t event, struct tcp_inf
       }
     case INFO_REPLY_RECEIVED:
     {
-      fprintf(stderr, "Info reply received, peer information :\n \t RTT : %u msec\n \t Losses : %u \n \t Retransmit : %u \n",infos.tcpi_rtt, infos.tcpi_lost, infos.tcpi_retrans);
+      fprintf(stderr, "Info reply received, peer information :\n \t RTT : %u msec\n \t Losses : %u \n \t Retransmit : %u \n",
+                      infos.tcpi_rtt, infos.tcpi_lost, infos.tcpi_retrans);
       if(transportid == 0){
         exit(0);
       }
@@ -979,9 +981,11 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   int has_migrated = 0;
   int has_remigrated = 0;
   int has_multipath =0;
+  int has_probed = 0;
   int n_streams = 1;
   int received_data = 0;
   int mB_received = 0;
+  int loops = 0;
   struct timeval timeout;
   ptls_handshake_properties_t prop = {NULL};
   FILE *outputfile = NULL;
@@ -995,6 +999,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   //tcpls_PING_INFO(tcpls, 0);
 
   while (1) {
+    loops++;
     /*cleanup*/
     int *socket;
     for (int i = 0; i < data->socktoremove->size; i++) {
@@ -1027,10 +1032,11 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
           fprintf(stderr, "handle_tcpls_read returned %d\n",ret);
           break;
         }
+
         received_data += ret;
         if (received_data / 1000000 > mB_received) {
           mB_received++;
-          //printf("Received %d MB\n",mB_received);
+          printf("Received %d MB\n",mB_received);
         }
         if (outputfile && ret >= 0) {
           /** write infos on this received data */
@@ -1083,6 +1089,12 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
 
     } else{
       recvbuf->decryptbuf->off = 0;
+    }
+
+    if (test == T_INFO && loops >= 100 && !has_probed){
+      has_probed = 1;
+      fprintf(stderr, "Probing tcp_info...\n");
+      tcpls_ping_info(tcpls, 0);
     }
 
     if (test == T_MULTIPATH && received_data >= 41457280  && !has_remigrated) {
@@ -1263,9 +1275,6 @@ static int handle_client_ping_test(tcpls_t *tcpls,integration_test_t test, struc
   case T_RTT:
     tcpls_ping_rtt(tcpls, 0);
     break;
-  case T_INFO:
-    tcpls_ping_info(tcpls, 0);
-    break;
   default:
     fprintf(stderr, "Unknown ping test %d\n", test);
     break;
@@ -1419,7 +1428,6 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
       else
         printf("TEST RTT: FAILURE\n");
       break;
-    case T_INFO:
       ret = handle_client_ping_test(tcpls, test, data);
       if(!ret)
         printf("TEST INFO: SUCCESS\n");
@@ -1438,6 +1446,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
     case T_MULTIPATH:
     case T_AGGREGATION:
     case T_AGGREGATION_TIME:
+    case T_INFO:
       {
         struct timeval timeout;
         timeout.tv_sec = 5;
@@ -1847,7 +1856,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             conntcpls.tcpls = new_tcpls;
             if (test == T_MULTIPATH || new_tcpls->enable_failover || test == T_AGGREGATION || test == T_AGGREGATION_TIME || test == T_MULTIPLEXING)
               conntcpls.tcpls->enable_multipath = 1;
-            if (test == T_SIMPLE_TRANSFER || test == T_MULTIPATH || test == T_AGGREGATION || test == T_AGGREGATION_TIME)// || test == T_MULTIPLEXING)
+            if (test == T_SIMPLE_TRANSFER || test == T_MULTIPATH || test == T_AGGREGATION || test == T_AGGREGATION_TIME || test == T_INFO)// || test == T_MULTIPLEXING)
               conntcpls.recvbuf = tcpls_aggr_buffer_new(conntcpls.tcpls);
             else{
               conntcpls.recvbuf = tcpls_stream_buffers_new(conntcpls.tcpls, max_stream);
@@ -1869,7 +1878,6 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
       switch (test) {
         case T_NAT:
         case T_RTT:
-        case T_INFO:
             if ((ret = handle_server_reply_test(conn_tcpls, &readset)) < -1) {
               goto Exit;
             }
@@ -1879,6 +1887,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         case T_AGGREGATION:
         case T_AGGREGATION_TIME:
         case T_MULTIPLEXING:
+        case T_INFO:
           assert(input_file);
           if (!inputfd && (inputfd = open(input_file, O_RDONLY)) == -1) {
             fprintf(stderr, "failed to open file:%s:%s\n", input_file, strerror(errno));
@@ -2222,6 +2231,8 @@ int main(int argc, char **argv)
                 else if (strcasecmp(optarg, "info") == 0){
                   test = T_INFO;
                 }
+                else if (strcasecmp(optarg, "flow") == 0)
+                  test = T_FLOW;
                 else if (strcasecmp(optarg, "latency") == 0)
                   test = T_LATENCY;
                 else {
